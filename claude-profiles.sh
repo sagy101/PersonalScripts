@@ -39,13 +39,13 @@ claude-litellm() {
     echo "" >&2
     return 1
   fi
-  echo "🔗 Claude Code → LiteLLM proxy ($base_url)"
-  # Use `command claude` to call the binary directly, bypassing the headroom
-  # wrapper which would override ANTHROPIC_BASE_URL with its local proxy.
+  echo "🔗 Claude Code → Headroom → LiteLLM proxy ($base_url)"
+  # ANTHROPIC_TARGET_API_URL tells headroom's proxy where to forward upstream.
+  # ANTHROPIC_AUTH_TOKEN is the LiteLLM key passed through to the upstream.
   CLAUDE_CONFIG_DIR=~/.claude-litellm \
-  ANTHROPIC_BASE_URL="$base_url" \
+  ANTHROPIC_TARGET_API_URL="$base_url" \
   ANTHROPIC_AUTH_TOKEN="$api_key" \
-    command claude "$@"
+    claude "$@"
 }
 
 # ── Subscription profile #1 (default account) ────────────────────────
