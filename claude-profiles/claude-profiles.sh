@@ -25,8 +25,16 @@
 _claude_restart_headroom_proxy() {
   local pids
   pids=$(lsof -ti :8787 2>/dev/null) || return 0
-  [[ -n "$pids" ]] && kill $pids 2>/dev/null
-  sleep 0.3  # let the port free up
+  [[ -z "$pids" ]] && return 0
+  kill $pids 2>/dev/null
+  # Wait for port to actually free up (up to 3s)
+  local i=0
+  while lsof -ti :8787 &>/dev/null && (( i < 15 )); do
+    sleep 0.2; ((i++))
+  done
+  # Force-kill if still alive
+  pids=$(lsof -ti :8787 2>/dev/null) || return 0
+  [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null && sleep 0.5
 }
 
 # ── Shared config sync ────────────────────────────────────────────────
