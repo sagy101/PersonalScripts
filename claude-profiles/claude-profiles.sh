@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
 # Claude Code Multi-Profile Launcher
-# Source this file in your ~/.zshrc:   source ~/PersonalScripts/claude-profiles.sh
+# Source this file in your ~/.zshrc:   source ~/PersonalScripts/claude-profiles/claude-profiles.sh
 #
 # All profiles call `claude` which resolves to your existing shell
 # function/alias (e.g. headroom wrap), so wrappers apply automatically.
