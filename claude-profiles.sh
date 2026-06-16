@@ -39,13 +39,20 @@ claude-litellm() {
     echo "" >&2
     return 1
   fi
-  echo "🔗 Claude Code → Headroom → LiteLLM proxy ($base_url)"
-  # ANTHROPIC_TARGET_API_URL tells headroom's proxy where to forward upstream.
-  # ANTHROPIC_AUTH_TOKEN is the LiteLLM key passed through to the upstream.
-  CLAUDE_CONFIG_DIR=~/.claude-litellm \
-  ANTHROPIC_TARGET_API_URL="$base_url" \
-  ANTHROPIC_AUTH_TOKEN="$api_key" \
-    claude "$@"
+  if type headroom &>/dev/null && [[ "$(type claude 2>/dev/null)" == *headroom* ]]; then
+    echo "🔗 Claude Code → Headroom → LiteLLM proxy ($base_url)"
+    # Route headroom's upstream to LiteLLM instead of Anthropic
+    CLAUDE_CONFIG_DIR=~/.claude-litellm \
+    ANTHROPIC_TARGET_API_URL="$base_url" \
+    ANTHROPIC_AUTH_TOKEN="$api_key" \
+      claude "$@"
+  else
+    echo "🔗 Claude Code → LiteLLM proxy ($base_url)"
+    CLAUDE_CONFIG_DIR=~/.claude-litellm \
+    ANTHROPIC_BASE_URL="$base_url" \
+    ANTHROPIC_AUTH_TOKEN="$api_key" \
+      claude "$@"
+  fi
 }
 
 # ── Subscription profile #1 (default account) ────────────────────────
