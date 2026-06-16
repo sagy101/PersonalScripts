@@ -18,6 +18,46 @@
 #   CLAUDE_CODE_LITELLM_KEY   — your LiteLLM API key
 # ──────────────────────────────────────────────────────────────────────
 
+# ── Shared config sync ────────────────────────────────────────────────
+# Symlink shared config files from ~/.claude into alternate profile dirs
+# so settings, plugins, hooks, statusline, etc. stay consistent.
+# Auth credentials (.claude.json) are NOT linked — each profile keeps its own.
+_claude_sync_config() {
+  local target_dir="$1"
+  local source_dir="$HOME/.claude"
+  [[ -d "$source_dir" ]] || return 0
+  [[ "$target_dir" == "$source_dir" ]] && return 0
+  mkdir -p "$target_dir"
+
+  local shared_files=(
+    settings.json
+    keybindings.json
+    statusline.sh
+    claude-powerline.json
+    CLAUDE.md
+    RTK.md
+  )
+  local shared_dirs=(
+    hooks
+    scripts
+    powerline
+    plugins
+  )
+
+  for f in "${shared_files[@]}"; do
+    [[ -e "$source_dir/$f" ]] || continue
+    [[ -L "$target_dir/$f" ]] && continue  # already linked
+    rm -f "$target_dir/$f"
+    ln -s "$source_dir/$f" "$target_dir/$f"
+  done
+  for d in "${shared_dirs[@]}"; do
+    [[ -d "$source_dir/$d" ]] || continue
+    [[ -L "$target_dir/$d" ]] && continue
+    rm -rf "$target_dir/$d"
+    ln -s "$source_dir/$d" "$target_dir/$d"
+  done
+}
+
 # ── LiteLLM profile ──────────────────────────────────────────────────
 # Routes through your LiteLLM proxy (set CLAUDE_CODE_LITELLM_URL + CLAUDE_CODE_LITELLM_KEY)
 claude-litellm() {
@@ -39,6 +79,7 @@ claude-litellm() {
     echo "" >&2
     return 1
   fi
+  _claude_sync_config "$HOME/.claude-litellm"
   if command -v headroom &>/dev/null && [[ "$(which claude 2>/dev/null)" == *headroom* ]]; then
     echo "🔗 Claude Code → Headroom → LiteLLM proxy ($base_url)"
     # Route headroom's upstream to LiteLLM instead of Anthropic
@@ -66,6 +107,7 @@ claude-sub1() {
 # ── Subscription profile #2 (second account) ─────────────────────────
 # A second Anthropic subscription account (different email)
 claude-sub2() {
+  _claude_sync_config "$HOME/.claude-sub2"
   echo "💳 Claude Code → Subscription (secondary)"
   CLAUDE_CONFIG_DIR=~/.claude-sub2 \
     claude "$@"
@@ -89,7 +131,7 @@ _claude_bedrock_launcher() {
     aws sso login --profile "$profile" || { echo "SSO login failed"; return 1; }
   fi
 
-  mkdir -p ~/.claude-bedrock-"$profile"
+  _claude_sync_config "$HOME/.claude-bedrock-$profile"
 
   CLAUDE_CONFIG_DIR=~/.claude-bedrock-"$profile" \
   CLAUDE_CODE_USE_BEDROCK=1 \
