@@ -39,7 +39,7 @@ claude-litellm() {
     echo "" >&2
     return 1
   fi
-  if type headroom &>/dev/null && [[ "$(type claude 2>/dev/null)" == *headroom* ]]; then
+  if command -v headroom &>/dev/null && [[ "$(which claude 2>/dev/null)" == *headroom* ]]; then
     echo "🔗 Claude Code → Headroom → LiteLLM proxy ($base_url)"
     # Route headroom's upstream to LiteLLM instead of Anthropic
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
