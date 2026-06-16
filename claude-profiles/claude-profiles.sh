@@ -165,14 +165,15 @@ _claude_bedrock_launcher() {
 
   _claude_sync_config "$HOME/.claude-bedrock-$profile"
 
-  # Bedrock uses different model IDs than Anthropic API / LiteLLM
+  # Bedrock uses different model IDs than Anthropic API / LiteLLM.
+  # [1m] suffix enables 1M context (Claude Code strips it before sending).
   CLAUDE_CONFIG_DIR=~/.claude-bedrock-"$profile" \
   CLAUDE_CODE_USE_BEDROCK=1 \
   AWS_PROFILE="$profile" \
   AWS_REGION="$region" \
-  ANTHROPIC_DEFAULT_OPUS_MODEL="us.anthropic.claude-opus-4-8" \
-  ANTHROPIC_DEFAULT_SONNET_MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0" \
-  ANTHROPIC_DEFAULT_HAIKU_MODEL="us.anthropic.claude-haiku-3-5-20241022-v1:0" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="us.anthropic.claude-opus-4-8[1m]" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL="us.anthropic.claude-sonnet-4-6[1m]" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="us.anthropic.claude-haiku-4-5-20251001-v1:0" \
     _claude_with_headroom 8790 "$@"
 }
 
