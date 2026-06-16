@@ -36,12 +36,15 @@ _claude_sync_config() {
     claude-powerline.json
     CLAUDE.md
     RTK.md
+    history.jsonl
   )
   local shared_dirs=(
     hooks
     scripts
     powerline
     plugins
+    sessions
+    projects
   )
 
   for f in "${shared_files[@]}"; do
