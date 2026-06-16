@@ -47,6 +47,34 @@ _claude_with_headroom() {
   fi
 }
 
+# ── Bedrock model ID mapping ──────────────────────────────────────────
+# Converts an Anthropic API model name to a Bedrock cross-region ID.
+# 4.6+ gen (Sonnet 4.6, Opus 4.7+): just prepend us.anthropic.
+# Pre-4.6 gen: need date+version suffix — maintained in fallback map.
+# All get [1m] suffix for 1M context unless already present.
+_BEDROCK_FALLBACK_MAP=(
+  "claude-haiku-4-5:us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  "claude-sonnet-4-5:us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  "claude-opus-4-6:us.anthropic.claude-opus-4-6-v1"
+)
+
+_to_bedrock_model() {
+  local api_name="$1"
+  local base="${api_name%%\[*\]}"  # strip [1m] if present
+  # Already a Bedrock ID? pass through
+  [[ "$base" == us.anthropic.* ]] && echo "${api_name}" && return
+  # Check fallback map for pre-4.6 gen models
+  local entry
+  for entry in "${_BEDROCK_FALLBACK_MAP[@]}"; do
+    if [[ "${entry%%:*}" == "$base" ]]; then
+      echo "${entry#*:}[1m]"
+      return
+    fi
+  done
+  # 4.6+ gen: simple prepend
+  echo "us.anthropic.${base}[1m]"
+}
+
 # ── Shared config sync ────────────────────────────────────────────────
 # Symlink shared config files from ~/.claude into alternate profile dirs
 # so settings, plugins, hooks, statusline, etc. stay consistent.
@@ -165,15 +193,25 @@ _claude_bedrock_launcher() {
 
   _claude_sync_config "$HOME/.claude-bedrock-$profile"
 
-  # Bedrock uses different model IDs than Anthropic API / LiteLLM.
-  # [1m] suffix enables 1M context (Claude Code strips it before sending).
+  # Auto-derive Bedrock model IDs from settings.json / env.
+  # Bedrock 4.6+ gen: us.anthropic.<name> (simple prepend).
+  # Pre-4.6 gen (haiku): need date+version suffix — fallback map below.
+  local settings="$HOME/.claude/settings.json"
+  local opus_api sonnet_api haiku_api
+  opus_api=$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL // empty' "$settings" 2>/dev/null)
+  opus_api="${opus_api:-claude-opus-4-8}"
+  sonnet_api=$(jq -r '.env.ANTHROPIC_DEFAULT_SONNET_MODEL // empty' "$settings" 2>/dev/null)
+  sonnet_api="${sonnet_api:-claude-sonnet-4-6}"
+  haiku_api=$(jq -r '.env.ANTHROPIC_DEFAULT_HAIKU_MODEL // empty' "$settings" 2>/dev/null)
+  haiku_api="${haiku_api:-claude-haiku-4-5}"
+
   CLAUDE_CONFIG_DIR=~/.claude-bedrock-"$profile" \
   CLAUDE_CODE_USE_BEDROCK=1 \
   AWS_PROFILE="$profile" \
   AWS_REGION="$region" \
-  ANTHROPIC_DEFAULT_OPUS_MODEL="us.anthropic.claude-opus-4-8[1m]" \
-  ANTHROPIC_DEFAULT_SONNET_MODEL="us.anthropic.claude-sonnet-4-6[1m]" \
-  ANTHROPIC_DEFAULT_HAIKU_MODEL="us.anthropic.claude-haiku-4-5-20251001-v1:0" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="$(_to_bedrock_model "$opus_api")" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL="$(_to_bedrock_model "$sonnet_api")" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="$(_to_bedrock_model "$haiku_api")" \
     _claude_with_headroom 8790 "$@"
 }
 
