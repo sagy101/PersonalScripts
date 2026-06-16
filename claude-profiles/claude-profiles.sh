@@ -18,6 +18,17 @@
 #   CLAUDE_CODE_LITELLM_KEY   — your LiteLLM API key
 # ──────────────────────────────────────────────────────────────────────
 
+# ── Headroom proxy restart ────────────────────────────────────────────
+# Kill any running headroom proxy so a fresh one starts with the correct
+# upstream (LiteLLM vs Anthropic vs Bedrock). Without this, switching
+# profiles reuses a stale proxy pointed at the previous provider.
+_claude_restart_headroom_proxy() {
+  local pids
+  pids=$(lsof -ti :8787 2>/dev/null) || return 0
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null
+  sleep 0.3  # let the port free up
+}
+
 # ── Shared config sync ────────────────────────────────────────────────
 # Symlink shared config files from ~/.claude into alternate profile dirs
 # so settings, plugins, hooks, statusline, etc. stay consistent.
@@ -82,6 +93,7 @@ claude-litellm() {
     echo "" >&2
     return 1
   fi
+  _claude_restart_headroom_proxy
   _claude_sync_config "$HOME/.claude-litellm"
   # LITELLM_BUDGET_URL lets the statusline query /key/info on the real
   # LiteLLM server (not headroom's local proxy) for budget display.
@@ -104,6 +116,7 @@ claude-litellm() {
 # ── Subscription profile #1 (default account) ────────────────────────
 # Standard Anthropic subscription — default config dir
 claude-sub1() {
+  _claude_restart_headroom_proxy
   echo "💳 Claude Code → Subscription (primary)"
   CLAUDE_CONFIG_DIR=~/.claude \
     claude "$@"
@@ -112,6 +125,7 @@ claude-sub1() {
 # ── Subscription profile #2 (second account) ─────────────────────────
 # A second Anthropic subscription account (different email)
 claude-sub2() {
+  _claude_restart_headroom_proxy
   _claude_sync_config "$HOME/.claude-sub2"
   echo "💳 Claude Code → Subscription (secondary)"
   CLAUDE_CONFIG_DIR=~/.claude-sub2 \
@@ -128,6 +142,7 @@ _claude_bedrock_launcher() {
   region="$(aws configure get region --profile "$profile" 2>/dev/null)"
   region="${region:-us-east-1}"
 
+  _claude_restart_headroom_proxy
   echo "☁️  Claude Code → AWS Bedrock  [profile=$profile  region=$region]"
 
   # Ensure SSO session is active; login if expired
