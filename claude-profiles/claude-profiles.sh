@@ -3,9 +3,14 @@
 # Claude Code Multi-Profile Launcher
 # Source this file in your ~/.zshrc:   source ~/PersonalScripts/claude-profiles/claude-profiles.sh
 #
-# All profiles call `claude` which resolves to your existing shell
-# function/alias (e.g. headroom wrap), so wrappers apply automatically.
 # All claude flags (--resume, -m, -p, etc.) pass through via "$@".
+#
+# Each profile gets its own headroom proxy port so multiple profiles
+# can run simultaneously:
+#   claude / claude-sub1   → port 8787 (default)
+#   claude-litellm         → port 8788
+#   claude-sub2            → port 8789
+#   claude-bedrock-*       → port 8790
 #
 # Bedrock profiles are auto-generated from ~/.aws/config:
 #   [profile lab]  →  claude-bedrock-lab
@@ -18,23 +23,28 @@
 #   CLAUDE_CODE_LITELLM_KEY   — your LiteLLM API key
 # ──────────────────────────────────────────────────────────────────────
 
-# ── Headroom proxy restart ────────────────────────────────────────────
-# Kill any running headroom proxy so a fresh one starts with the correct
-# upstream (LiteLLM vs Anthropic vs Bedrock). Without this, switching
-# profiles reuses a stale proxy pointed at the previous provider.
-_claude_restart_headroom_proxy() {
-  local pids
-  pids=$(lsof -ti :8787 2>/dev/null) || return 0
-  [[ -z "$pids" ]] && return 0
-  kill $pids 2>/dev/null
-  # Wait for port to actually free up (up to 3s)
-  local i=0
-  while lsof -ti :8787 &>/dev/null && (( i < 15 )); do
-    sleep 0.2; ((i++))
-  done
-  # Force-kill if still alive
-  pids=$(lsof -ti :8787 2>/dev/null) || return 0
-  [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null && sleep 0.5
+# ── Headroom launcher ────────────────────────────────────────────────
+# Calls headroom wrap claude on a specific port, or falls back to the
+# claude binary directly if headroom is not installed.
+_CLAUDE_HAS_HEADROOM=""
+_claude_check_headroom() {
+  if [[ -z "$_CLAUDE_HAS_HEADROOM" ]]; then
+    if command -v headroom &>/dev/null && [[ "$(which claude 2>/dev/null)" == *headroom* ]]; then
+      _CLAUDE_HAS_HEADROOM=1
+    else
+      _CLAUDE_HAS_HEADROOM=0
+    fi
+  fi
+  [[ "$_CLAUDE_HAS_HEADROOM" == "1" ]]
+}
+
+_claude_with_headroom() {
+  local port="$1"; shift
+  if _claude_check_headroom; then
+    headroom wrap claude --port "$port" -- "$@"
+  else
+    command claude "$@"
+  fi
 }
 
 # ── Shared config sync ────────────────────────────────────────────────
@@ -101,43 +111,38 @@ claude-litellm() {
     echo "" >&2
     return 1
   fi
-  _claude_restart_headroom_proxy
   _claude_sync_config "$HOME/.claude-litellm"
-  # LITELLM_BUDGET_URL lets the statusline query /key/info on the real
-  # LiteLLM server (not headroom's local proxy) for budget display.
-  if command -v headroom &>/dev/null && [[ "$(which claude 2>/dev/null)" == *headroom* ]]; then
-    echo "🔗 Claude Code → Headroom → LiteLLM proxy ($base_url)"
+  if _claude_check_headroom; then
+    echo "🔗 Claude Code → Headroom (:8788) → LiteLLM proxy ($base_url)"
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
     ANTHROPIC_TARGET_API_URL="$base_url" \
     ANTHROPIC_AUTH_TOKEN="$api_key" \
     LITELLM_BUDGET_URL="$base_url" \
-      claude "$@"
+      _claude_with_headroom 8788 "$@"
   else
     echo "🔗 Claude Code → LiteLLM proxy ($base_url)"
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
     ANTHROPIC_BASE_URL="$base_url" \
     ANTHROPIC_AUTH_TOKEN="$api_key" \
-      claude "$@"
+      command claude "$@"
   fi
 }
 
 # ── Subscription profile #1 (default account) ────────────────────────
 # Standard Anthropic subscription — default config dir
 claude-sub1() {
-  _claude_restart_headroom_proxy
   echo "💳 Claude Code → Subscription (primary)"
   CLAUDE_CONFIG_DIR=~/.claude \
-    claude "$@"
+    _claude_with_headroom 8787 "$@"
 }
 
 # ── Subscription profile #2 (second account) ─────────────────────────
 # A second Anthropic subscription account (different email)
 claude-sub2() {
-  _claude_restart_headroom_proxy
   _claude_sync_config "$HOME/.claude-sub2"
   echo "💳 Claude Code → Subscription (secondary)"
   CLAUDE_CONFIG_DIR=~/.claude-sub2 \
-    claude "$@"
+    _claude_with_headroom 8789 "$@"
 }
 
 # ── Dynamic Bedrock profiles from ~/.aws/config ──────────────────────
@@ -150,7 +155,6 @@ _claude_bedrock_launcher() {
   region="$(aws configure get region --profile "$profile" 2>/dev/null)"
   region="${region:-us-east-1}"
 
-  _claude_restart_headroom_proxy
   echo "☁️  Claude Code → AWS Bedrock  [profile=$profile  region=$region]"
 
   # Ensure SSO session is active; login if expired
@@ -165,7 +169,7 @@ _claude_bedrock_launcher() {
   CLAUDE_CODE_USE_BEDROCK=1 \
   AWS_PROFILE="$profile" \
   AWS_REGION="$region" \
-    claude "$@"
+    _claude_with_headroom 8790 "$@"
 }
 
 # Parse ~/.aws/config and register one function per profile
