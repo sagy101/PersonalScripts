@@ -80,12 +80,14 @@ claude-litellm() {
     return 1
   fi
   _claude_sync_config "$HOME/.claude-litellm"
+  # LITELLM_BUDGET_URL lets the statusline query /key/info on the real
+  # LiteLLM server (not headroom's local proxy) for budget display.
   if command -v headroom &>/dev/null && [[ "$(which claude 2>/dev/null)" == *headroom* ]]; then
     echo "🔗 Claude Code → Headroom → LiteLLM proxy ($base_url)"
-    # Route headroom's upstream to LiteLLM instead of Anthropic
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
     ANTHROPIC_TARGET_API_URL="$base_url" \
     ANTHROPIC_AUTH_TOKEN="$api_key" \
+    LITELLM_BUDGET_URL="$base_url" \
       claude "$@"
   else
     echo "🔗 Claude Code → LiteLLM proxy ($base_url)"
