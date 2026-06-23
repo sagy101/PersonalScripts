@@ -4,13 +4,16 @@
 # Source this file in your ~/.zshrc:   source ~/PersonalScripts/claude-profiles/claude-profiles.sh
 #
 # All claude flags (--resume, -m, -p, etc.) pass through via "$@".
+# Pass --no-headroom (or --no-hr) to run a profile WITHOUT the Headroom proxy.
 #
-# Each profile gets its own headroom proxy port so multiple profiles
-# can run simultaneously:
-#   claude / claude-sub1   → port 8787 (default)
-#   claude-litellm         → port 8788
-#   claude-sub2            → port 8789
-#   claude-bedrock-*       → port 8790
+# Each profile gets its own NON-OVERLAPPING block of headroom proxy ports,
+# so multiple profiles — and multiple sessions of the same profile — can run
+# simultaneously without ever colliding on a port:
+#   claude / claude-sub1   → ports 8787-8796
+#   claude-litellm         → ports 8800-8809
+#   claude-sub2            → ports 8810-8819
+#   claude-bedrock-*       → ports 8820-8899 (each AWS profile gets its own
+#                            10-port sub-block, derived from the profile name)
 #
 # Bedrock profiles are auto-generated from ~/.aws/config:
 #   [profile lab]  →  claude-bedrock-lab
@@ -24,10 +27,19 @@
 # ──────────────────────────────────────────────────────────────────────
 
 # ── Headroom launcher ────────────────────────────────────────────────
-# Calls headroom wrap claude on a specific port, or falls back to the
-# claude binary directly if headroom is not installed.
+# Each profile owns a dedicated, NON-OVERLAPPING block of ports so that
+# concurrent sessions of different profiles can never drift onto each
+# other's ports — and a check-then-launch race can only ever reuse a proxy
+# from the SAME profile (same credentials/backend), never a different one.
+_CLAUDE_PORT_BLOCK_SIZE=10        # max concurrent sessions per profile
+_CLAUDE_PORT_RANGE_LOW=8787       # low end of the whole managed range
+_CLAUDE_PORT_RANGE_HIGH=8899      # high end (keep ≥ largest block ceiling)
+
 _CLAUDE_HAS_HEADROOM=""
+_CLAUDE_NO_HEADROOM=0   # per-invocation: set by --no-headroom to bypass the proxy
 _claude_check_headroom() {
+  # --no-headroom forces the direct (proxy-less) path for this invocation.
+  [[ "${_CLAUDE_NO_HEADROOM:-0}" == "1" ]] && return 1
   if [[ -z "$_CLAUDE_HAS_HEADROOM" ]]; then
     if command -v headroom &>/dev/null && [[ "$(which claude 2>/dev/null)" == *headroom* ]]; then
       _CLAUDE_HAS_HEADROOM=1
@@ -38,42 +50,66 @@ _claude_check_headroom() {
   [[ "$_CLAUDE_HAS_HEADROOM" == "1" ]]
 }
 
-_claude_with_headroom() {
-  local base_port="$1"; shift
-  if _claude_check_headroom; then
-    # Check if proxy is already running on this port
-    if lsof -i ":$base_port" >/dev/null 2>&1; then
-      echo "🔄 Headroom proxy already running on port $base_port - reusing..."
-      CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" \
-      ANTHROPIC_BASE_URL="http://127.0.0.1:$base_port" \
-        command claude "$@"
-    else
-      headroom wrap claude --port "$base_port" -- "$@"
-    fi
-  else
-    command claude "$@"
-  fi
+# Strip claude-profiles' own flags before the rest reach `claude`.
+#   --no-headroom / --no-hr → run the profile WITHOUT the Headroom proxy
+#                             (direct to Anthropic / LiteLLM / Bedrock).
+# Resets _CLAUDE_NO_HEADROOM and fills _CLAUDE_ARGV with the cleaned args;
+# callers do:  _claude_parse_flags "$@"; set -- "${_CLAUDE_ARGV[@]}"
+_claude_parse_flags() {
+  _CLAUDE_NO_HEADROOM=0
+  _CLAUDE_ARGV=()
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --no-headroom|--no-hr) _CLAUDE_NO_HEADROOM=1 ;;
+      *) _CLAUDE_ARGV+=("$a") ;;
+    esac
+  done
 }
 
-# For true parallel sessions - find available port
+# Launch a profile through its own headroom proxy, choosing a free port
+# WITHIN that profile's block. Concurrent same-profile sessions each get
+# their own proxy; if the block is full we refuse rather than spill over
+# into the next profile's range (which is what used to cross-wire profiles).
 _claude_with_headroom_dynamic() {
   local base_port="$1"; shift
   if ! _claude_check_headroom; then
-    command claude "$@"
+    [[ "${_CLAUDE_NO_HEADROOM:-0}" == "1" ]] && echo "⏭️  Headroom bypassed (--no-headroom) — running claude directly"
+    # Direct subscription/Bedrock path — drop any inherited proxy base URL
+    # (e.g. from a parent Headroom session) so the request really goes to the
+    # backend instead of a stale proxy port.
+    ( unset ANTHROPIC_BASE_URL; command claude "$@" )
     return
   fi
 
-  # Find an available port starting from base_port
+  local ceiling=$((base_port + _CLAUDE_PORT_BLOCK_SIZE - 1))
   local port=$base_port
-  while lsof -i ":$port" >/dev/null 2>&1; do
+  # Treat a port as taken only if something is actually LISTENing on it.
+  # (`lsof -i :p` also matches ESTABLISHED/ephemeral sockets → false "busy".)
+  while [[ $port -le $ceiling ]] && lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
     port=$((port + 1))
   done
-  
-  if [[ $port -ne $base_port ]]; then
-    echo "🔄 Port $base_port busy, using port $port for this session"
+
+  if [[ $port -gt $ceiling ]]; then
+    echo "❌ This profile's port block ($base_port-$ceiling) is full — you already" >&2
+    echo "   have $_CLAUDE_PORT_BLOCK_SIZE sessions running. Close one, or run" >&2
+    echo "   'claude-cleanup' to reap orphaned proxies." >&2
+    return 1
   fi
-  
-  headroom wrap claude --port "$port" -- "$@"
+
+  if [[ $port -ne $base_port ]]; then
+    echo "🔄 Base port $base_port busy — using $port (same profile block) for this session"
+  fi
+
+  # Force Headroom's pure-Python content detector. The native Rust detector
+  # (headroom._core → unidiff crate) panics — `Option::unwrap() on None`,
+  # unidiff-0.4.0/src/lib.rs:665 — on certain diff-shaped tool-result blocks,
+  # which crashes the compression task and returns a 500 to Claude. The Python
+  # backend is the same one Headroom uses on Windows; compression stays on.
+  # Confirmed still broken in headroom-ai 0.27.0 (2026-06-23). Respects an
+  # explicit override if you've set HEADROOM_DETECT_BACKEND yourself.
+  HEADROOM_DETECT_BACKEND="${HEADROOM_DETECT_BACKEND:-python}" \
+    headroom wrap claude --port "$port" -- "$@"
 }
 
 # ── Bedrock model ID mapping ──────────────────────────────────────────
@@ -150,6 +186,7 @@ _claude_sync_config() {
 # ── LiteLLM profile ──────────────────────────────────────────────────
 # Routes through your LiteLLM proxy (set CLAUDE_CODE_LITELLM_URL + CLAUDE_CODE_LITELLM_KEY)
 claude-litellm() {
+  _claude_parse_flags "$@"; set -- "${_CLAUDE_ARGV[@]}"
   local base_url="${CLAUDE_CODE_LITELLM_URL:-}"
   local api_key="${CLAUDE_CODE_LITELLM_KEY:-}"
   local missing=()
@@ -170,12 +207,12 @@ claude-litellm() {
   fi
   _claude_sync_config "$HOME/.claude-litellm"
   if _claude_check_headroom; then
-    echo "🔗 Claude Code → Headroom (:8788) → LiteLLM proxy ($base_url)"
+    echo "🔗 Claude Code → Headroom (:8800-8809) → LiteLLM proxy ($base_url)"
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
     ANTHROPIC_TARGET_API_URL="$base_url" \
     ANTHROPIC_AUTH_TOKEN="$api_key" \
     LITELLM_BUDGET_URL="$base_url" \
-      _claude_with_headroom_dynamic 8788 "$@"
+      _claude_with_headroom_dynamic 8800 "$@"
   else
     echo "🔗 Claude Code → LiteLLM proxy ($base_url)"
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
@@ -188,6 +225,7 @@ claude-litellm() {
 # ── Subscription profile #1 (default account) ────────────────────────
 # Standard Anthropic subscription — default config dir
 claude-sub1() {
+  _claude_parse_flags "$@"; set -- "${_CLAUDE_ARGV[@]}"
   echo "💳 Claude Code → Subscription (primary)"
   CLAUDE_CONFIG_DIR=~/.claude \
     _claude_with_headroom_dynamic 8787 "$@"
@@ -196,10 +234,11 @@ claude-sub1() {
 # ── Subscription profile #2 (second account) ─────────────────────────
 # A second Anthropic subscription account (different email)
 claude-sub2() {
+  _claude_parse_flags "$@"; set -- "${_CLAUDE_ARGV[@]}"
   _claude_sync_config "$HOME/.claude-sub2"
   echo "💳 Claude Code → Subscription (secondary)"
   CLAUDE_CONFIG_DIR=~/.claude-sub2 \
-    _claude_with_headroom_dynamic 8789 "$@"
+    _claude_with_headroom_dynamic 8810 "$@"
 }
 
 # ── Dynamic Bedrock profiles from ~/.aws/config ──────────────────────
@@ -208,6 +247,7 @@ claude-sub2() {
 
 _claude_bedrock_launcher() {
   local profile="$1"; shift
+  _claude_parse_flags "$@"; set -- "${_CLAUDE_ARGV[@]}"
   local region
   region="$(aws configure get region --profile "$profile" 2>/dev/null)"
   region="${region:-us-east-1}"
@@ -234,6 +274,13 @@ _claude_bedrock_launcher() {
   haiku_api=$(jq -r '.env.ANTHROPIC_DEFAULT_HAIKU_MODEL // empty' "$settings" 2>/dev/null)
   haiku_api="${haiku_api:-claude-haiku-4-5}"
 
+  # Give each AWS profile its own 10-port sub-block within the bedrock range
+  # (8820-8899), derived deterministically from the profile name, so two
+  # bedrock profiles (e.g. lab vs prod) running at once never share a proxy.
+  local _bedrock_hash
+  _bedrock_hash=$(printf '%s' "$profile" | cksum | cut -d' ' -f1)
+  local base_port=$(( 8820 + (_bedrock_hash % 8) * 10 ))
+
   CLAUDE_CONFIG_DIR=~/.claude-bedrock-"$profile" \
   CLAUDE_CODE_USE_BEDROCK=1 \
   AWS_PROFILE="$profile" \
@@ -241,7 +288,7 @@ _claude_bedrock_launcher() {
   ANTHROPIC_DEFAULT_OPUS_MODEL="$(_to_bedrock_model "$opus_api")" \
   ANTHROPIC_DEFAULT_SONNET_MODEL="$(_to_bedrock_model "$sonnet_api")" \
   ANTHROPIC_DEFAULT_HAIKU_MODEL="$(_to_bedrock_model "$haiku_api")" \
-    _claude_with_headroom_dynamic 8790 "$@"
+    _claude_with_headroom_dynamic "$base_port" "$@"
 }
 
 # Parse ~/.aws/config and register one function per profile
@@ -262,13 +309,31 @@ _claude_register_bedrock_profiles
 
 # ── Helper: cleanup orphaned proxies ────────────────────────────────────
 claude-cleanup() {
-  echo "🧹 Cleaning up orphaned Headroom proxies..."
-  local count=$(pkill -f "headroom.*proxy.*port" 2>/dev/null; echo $?)
-  if [[ $count -eq 0 ]]; then
-    echo "✅ Cleaned up orphaned proxies"
-  else
-    echo "ℹ️  No orphaned proxies found"
-  fi
+  local lo=$_CLAUDE_PORT_RANGE_LOW hi=$_CLAUDE_PORT_RANGE_HIGH
+  echo "🧹 Reaping orphaned Headroom proxies (ports ${lo}-${hi}, no active client)..."
+  local killed=0 skipped=0 pid port
+  # Match headroom proxy/wrapper processes and recover the --port they own.
+  # Only ports inside our managed range are touched, and a proxy that still
+  # has a client (Claude) connected is left alone — so this can never kill a
+  # live session, including ones from other profiles.
+  while read -r pid port; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$port" =~ ^[0-9]+$ ]] || continue
+    (( port >= lo && port <= hi )) || continue
+    if lsof -nP -iTCP:"$port" -sTCP:ESTABLISHED >/dev/null 2>&1; then
+      echo "   • :$port (pid $pid) — active client, leaving it"
+      skipped=$((skipped + 1))
+    elif kill "$pid" 2>/dev/null; then
+      echo "   • :$port (pid $pid) — orphaned, killed"
+      killed=$((killed + 1))
+    fi
+  done < <(
+    ps -Ao pid=,command= 2>/dev/null \
+      | grep -E 'headroom.*--port [0-9]+' \
+      | grep -v grep \
+      | sed -E 's/^[[:space:]]*([0-9]+).*--port[[:space:]]+([0-9]+).*/\1 \2/'
+  )
+  echo "✅ ${killed} reaped, ${skipped} left running (active clients)."
 }
 
 # ── Helper: list available profiles ───────────────────────────────────
@@ -297,4 +362,6 @@ claude-profiles() {
   echo ""
   echo "First run of each profile will trigger authentication if needed."
   echo "Add a new [profile X] to ~/.aws/config and re-source to get claude-bedrock-X."
+  echo ""
+  echo "Flags:  --no-headroom (--no-hr)   run a profile without the Headroom proxy"
 }
