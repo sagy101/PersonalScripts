@@ -39,12 +39,41 @@ _claude_check_headroom() {
 }
 
 _claude_with_headroom() {
-  local port="$1"; shift
+  local base_port="$1"; shift
   if _claude_check_headroom; then
-    headroom wrap claude --port "$port" -- "$@"
+    # Check if proxy is already running on this port
+    if lsof -i ":$base_port" >/dev/null 2>&1; then
+      echo "🔄 Headroom proxy already running on port $base_port - reusing..."
+      CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" \
+      ANTHROPIC_BASE_URL="http://127.0.0.1:$base_port" \
+        command claude "$@"
+    else
+      headroom wrap claude --port "$base_port" -- "$@"
+    fi
   else
     command claude "$@"
   fi
+}
+
+# For true parallel sessions - find available port
+_claude_with_headroom_dynamic() {
+  local base_port="$1"; shift
+  if ! _claude_check_headroom; then
+    command claude "$@"
+    return
+  fi
+
+  # Find an available port starting from base_port
+  local port=$base_port
+  while lsof -i ":$port" >/dev/null 2>&1; do
+    port=$((port + 1))
+  done
+  
+  if [[ $port -ne $base_port ]]; then
+    echo "🔄 Port $base_port busy, using port $port for this session"
+  fi
+  
+  headroom wrap claude --port "$port" -- "$@"
 }
 
 # ── Bedrock model ID mapping ──────────────────────────────────────────
@@ -146,7 +175,7 @@ claude-litellm() {
     ANTHROPIC_TARGET_API_URL="$base_url" \
     ANTHROPIC_AUTH_TOKEN="$api_key" \
     LITELLM_BUDGET_URL="$base_url" \
-      _claude_with_headroom 8788 "$@"
+      _claude_with_headroom_dynamic 8788 "$@"
   else
     echo "🔗 Claude Code → LiteLLM proxy ($base_url)"
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
@@ -161,7 +190,7 @@ claude-litellm() {
 claude-sub1() {
   echo "💳 Claude Code → Subscription (primary)"
   CLAUDE_CONFIG_DIR=~/.claude \
-    _claude_with_headroom 8787 "$@"
+    _claude_with_headroom_dynamic 8787 "$@"
 }
 
 # ── Subscription profile #2 (second account) ─────────────────────────
@@ -170,7 +199,7 @@ claude-sub2() {
   _claude_sync_config "$HOME/.claude-sub2"
   echo "💳 Claude Code → Subscription (secondary)"
   CLAUDE_CONFIG_DIR=~/.claude-sub2 \
-    _claude_with_headroom 8789 "$@"
+    _claude_with_headroom_dynamic 8789 "$@"
 }
 
 # ── Dynamic Bedrock profiles from ~/.aws/config ──────────────────────
@@ -212,7 +241,7 @@ _claude_bedrock_launcher() {
   ANTHROPIC_DEFAULT_OPUS_MODEL="$(_to_bedrock_model "$opus_api")" \
   ANTHROPIC_DEFAULT_SONNET_MODEL="$(_to_bedrock_model "$sonnet_api")" \
   ANTHROPIC_DEFAULT_HAIKU_MODEL="$(_to_bedrock_model "$haiku_api")" \
-    _claude_with_headroom 8790 "$@"
+    _claude_with_headroom_dynamic 8790 "$@"
 }
 
 # Parse ~/.aws/config and register one function per profile
@@ -230,6 +259,17 @@ _claude_register_bedrock_profiles() {
 }
 
 _claude_register_bedrock_profiles
+
+# ── Helper: cleanup orphaned proxies ────────────────────────────────────
+claude-cleanup() {
+  echo "🧹 Cleaning up orphaned Headroom proxies..."
+  local count=$(pkill -f "headroom.*proxy.*port" 2>/dev/null; echo $?)
+  if [[ $count -eq 0 ]]; then
+    echo "✅ Cleaned up orphaned proxies"
+  else
+    echo "ℹ️  No orphaned proxies found"
+  fi
+}
 
 # ── Helper: list available profiles ───────────────────────────────────
 claude-profiles() {
