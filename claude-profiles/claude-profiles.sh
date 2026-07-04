@@ -14,6 +14,7 @@
 #   claude-sub2            → ports 8810-8819
 #   claude-bedrock-*       → ports 8820-8899 (each AWS profile gets its own
 #                            10-port sub-block, derived from the profile name)
+#   claude-sub3            → ports 8900-8909
 #
 # Bedrock profiles are auto-generated from ~/.aws/config:
 #   [profile lab]  →  claude-bedrock-lab
@@ -33,7 +34,7 @@
 # from the SAME profile (same credentials/backend), never a different one.
 _CLAUDE_PORT_BLOCK_SIZE=10        # max concurrent sessions per profile
 _CLAUDE_PORT_RANGE_LOW=8787       # low end of the whole managed range
-_CLAUDE_PORT_RANGE_HIGH=8899      # high end (keep ≥ largest block ceiling)
+_CLAUDE_PORT_RANGE_HIGH=8909      # high end (keep ≥ largest block ceiling)
 
 _CLAUDE_HAS_HEADROOM=""
 _CLAUDE_NO_HEADROOM=0   # per-invocation: set by --no-headroom to bypass the proxy
@@ -84,9 +85,12 @@ _claude_with_headroom_dynamic() {
 
   local ceiling=$((base_port + _CLAUDE_PORT_BLOCK_SIZE - 1))
   local port=$base_port
-  # Treat a port as taken only if something is actually LISTENing on it.
-  # (`lsof -i :p` also matches ESTABLISHED/ephemeral sockets → false "busy".)
-  while [[ $port -le $ceiling ]] && lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
+  # Probe by actually binding 127.0.0.1:$port — the same check headroom does
+  # before starting its proxy. lsof -sTCP:LISTEN missed some holders (orphaned
+  # proxies with inherited fds / lingering sockets), so a "free" scan could
+  # still end in EADDRINUSE. A successful bind is ground truth.
+  while [[ $port -le $ceiling ]] && \
+      ! python3 -c "import socket; socket.socket().bind(('127.0.0.1', $port))" 2>/dev/null; do
     port=$((port + 1))
   done
 
@@ -108,8 +112,11 @@ _claude_with_headroom_dynamic() {
   # backend is the same one Headroom uses on Windows; compression stays on.
   # Confirmed still broken in headroom-ai 0.27.0 (2026-06-23). Respects an
   # explicit override if you've set HEADROOM_DETECT_BACKEND yourself.
-  HEADROOM_DETECT_BACKEND="${HEADROOM_DETECT_BACKEND:-python}" \
-    headroom wrap claude --port "$port" -- "$@"
+  # Drop any inherited proxy base URL (stale port from a parent/dead Headroom
+  # session) — headroom wrap sets its own from --port.
+  ( unset ANTHROPIC_BASE_URL
+    HEADROOM_DETECT_BACKEND="${HEADROOM_DETECT_BACKEND:-python}" \
+      headroom wrap claude --port "$port" -- "$@" )
 }
 
 # ── Bedrock model ID mapping ──────────────────────────────────────────
@@ -241,6 +248,16 @@ claude-sub2() {
     _claude_with_headroom_dynamic 8810 "$@"
 }
 
+# ── Subscription profile #3 (third account) ──────────────────────────
+# A third Anthropic subscription account (different email)
+claude-sub3() {
+  _claude_parse_flags "$@"; set -- "${_CLAUDE_ARGV[@]}"
+  _claude_sync_config "$HOME/.claude-sub3"
+  echo "💳 Claude Code → Subscription (tertiary)"
+  CLAUDE_CONFIG_DIR=~/.claude-sub3 \
+    _claude_with_headroom_dynamic 8900 "$@"
+}
+
 # ── Dynamic Bedrock profiles from ~/.aws/config ──────────────────────
 # For each [profile X] we create:  claude-bedrock-X
 # Each gets its own CLAUDE_CONFIG_DIR and runs aws sso login if needed.
@@ -343,6 +360,7 @@ claude-profiles() {
   echo "  claude-litellm       LiteLLM proxy  (${CLAUDE_CODE_LITELLM_URL:-<set CLAUDE_CODE_LITELLM_URL>})"
   echo "  claude-sub1          Subscription   (primary, ~/.claude)"
   echo "  claude-sub2          Subscription   (secondary, ~/.claude-sub2)"
+  echo "  claude-sub3          Subscription   (tertiary, ~/.claude-sub3)"
   echo ""
   echo "  Bedrock (auto-generated from ~/.aws/config):"
 
