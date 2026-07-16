@@ -74,12 +74,13 @@ _claude_parse_flags() {
 # into the next profile's range (which is what used to cross-wire profiles).
 _claude_with_headroom_dynamic() {
   local base_port="$1"; shift
+  _claude_shared_mcp_args
   if ! _claude_check_headroom; then
     [[ "${_CLAUDE_NO_HEADROOM:-0}" == "1" ]] && echo "⏭️  Headroom bypassed (--no-headroom) — running claude directly"
     # Direct subscription/Bedrock path — drop any inherited proxy base URL
     # (e.g. from a parent Headroom session) so the request really goes to the
     # backend instead of a stale proxy port.
-    ( unset ANTHROPIC_BASE_URL; command claude "$@" )
+    ( unset ANTHROPIC_BASE_URL; command claude "$@" "${_CLAUDE_MCP_ARGS[@]}" )
     return
   fi
 
@@ -114,9 +115,15 @@ _claude_with_headroom_dynamic() {
   # explicit override if you've set HEADROOM_DETECT_BACKEND yourself.
   # Drop any inherited proxy base URL (stale port from a parent/dead Headroom
   # session) — headroom wrap sets its own from --port.
+  # Pin this session's base URL at CLI precedence: headroom wrap persists its
+  # port into <cwd>/.claude/settings.local.json (issue #951), and settings env
+  # beats process env — so a stale/concurrent session's pin silently reroutes
+  # this one (litellm key → api.anthropic.com → "401 Invalid bearer token").
+  # A --settings arg outranks settings.local.json, making each session immune.
   ( unset ANTHROPIC_BASE_URL
     HEADROOM_DETECT_BACKEND="${HEADROOM_DETECT_BACKEND:-python}" \
-      headroom wrap claude --port "$port" -- "$@" )
+      headroom wrap claude --port "$port" -- "$@" "${_CLAUDE_MCP_ARGS[@]}" \
+        --settings "{\"env\":{\"ANTHROPIC_BASE_URL\":\"http://127.0.0.1:$port\"}}" )
 }
 
 # ── Bedrock model ID mapping ──────────────────────────────────────────
@@ -190,6 +197,17 @@ _claude_sync_config() {
   done
 }
 
+# ── Shared MCP servers ────────────────────────────────────────────────
+# One MCP file for ALL profiles, same idea as the symlinked skills/plugins:
+# servers in ~/.claude/mcp-shared.json load in every profile via --mcp-config.
+# Add/remove servers by editing that file ({"mcpServers": {...}}).
+# Auth stays per-profile (OAuth via /mcp in each), same as any registration.
+_claude_shared_mcp_args() {
+  _CLAUDE_MCP_ARGS=()
+  [[ -f "$HOME/.claude/mcp-shared.json" ]] && \
+    _CLAUDE_MCP_ARGS=(--mcp-config "$HOME/.claude/mcp-shared.json")
+}
+
 # ── LiteLLM profile ──────────────────────────────────────────────────
 # Routes through your LiteLLM proxy (set CLAUDE_CODE_LITELLM_URL + CLAUDE_CODE_LITELLM_KEY)
 claude-litellm() {
@@ -222,10 +240,12 @@ claude-litellm() {
       _claude_with_headroom_dynamic 8800 "$@"
   else
     echo "🔗 Claude Code → LiteLLM proxy ($base_url)"
+    _claude_shared_mcp_args
     CLAUDE_CONFIG_DIR=~/.claude-litellm \
     ANTHROPIC_BASE_URL="$base_url" \
     ANTHROPIC_AUTH_TOKEN="$api_key" \
-      command claude "$@"
+      command claude "$@" "${_CLAUDE_MCP_ARGS[@]}" \
+        --settings "{\"env\":{\"ANTHROPIC_BASE_URL\":\"$base_url\"}}"
   fi
 }
 
