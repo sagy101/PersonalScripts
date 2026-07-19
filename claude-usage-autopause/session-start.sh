@@ -53,7 +53,7 @@ Then, when that monitor emits an event, follow this protocol (full text: $HERE/P
   * RESET (5h dropped): read RESUME.md and resume the paused work — resume workflows via
     resumeFromRunId (the cached prefix is free), re-spawn the recorded agents — then delete
     RESUME.md. The monitor keeps running, so this can repeat as many times as needed.
-  * WARN_7D (7d >=90%): just tell the user; do NOT auto-park (the 7-day reset is days away).
+  * WARN_7D (7d >=95%): just tell the user; do NOT auto-park (the 7-day reset is days away).
 
 Keep the arming quiet — at most a one-line note. If a usage Monitor is already armed this
 session, do nothing.

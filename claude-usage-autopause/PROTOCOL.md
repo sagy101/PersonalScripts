@@ -44,7 +44,7 @@ full context.
 4. The monitor keeps running — if usage climbs back to 90% later, `WIND_DOWN` fires again.
    This loops as many times as a session needs.
 
-### `WARN_7D` — 7-day utilization ≥ 90%
+### `WARN_7D` — 7-day utilization ≥ 95%
 
 Just tell the user. **Do not auto-park** — the 7-day window can be days from resetting, and a
 session should not silently sleep that long. The user decides whether to stop.
@@ -65,4 +65,4 @@ The poll failed (expired token or network). Mention it briefly; the monitor keep
 ## Tuning
 
 Env vars on the `usage.sh watch` process: `USAGE_WIND_DOWN_AT` (default 90),
-`USAGE_RESET_BELOW` (80), `USAGE_WARN_7D_AT` (90), `USAGE_POLL_INTERVAL` (120s).
+`USAGE_RESET_BELOW` (80), `USAGE_WARN_7D_AT` (95), `USAGE_POLL_INTERVAL` (120s).

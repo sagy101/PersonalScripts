@@ -12,14 +12,14 @@
 #        is a metadata call (not model inference), so it keeps working even when the account
 #        is at its limit — which is what makes unattended resume possible.
 #
-# Tunables (env): USAGE_WIND_DOWN_AT=90  USAGE_RESET_BELOW=80  USAGE_WARN_7D_AT=90
+# Tunables (env): USAGE_WIND_DOWN_AT=90  USAGE_RESET_BELOW=80  USAGE_WARN_7D_AT=95
 #                 USAGE_POLL_INTERVAL=120
 set -uo pipefail
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 WIND_DOWN_AT="${USAGE_WIND_DOWN_AT:-90}"   # 5h utilization %% that triggers wind-down
 RESET_BELOW="${USAGE_RESET_BELOW:-80}"     # 5h util %% below this (while armed) => window reset
-WARN_7D_AT="${USAGE_WARN_7D_AT:-90}"       # 7d utilization %% that triggers a warn-only alert
+WARN_7D_AT="${USAGE_WARN_7D_AT:-95}"       # 7d utilization %% that triggers a warn-only alert
 INTERVAL="${USAGE_POLL_INTERVAL:-120}"     # seconds between polls in watch mode
 
 # --- token: keychain entry for the active profile's config dir --------------
