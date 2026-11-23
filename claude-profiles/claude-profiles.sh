@@ -204,8 +204,10 @@ _claude_sync_config() {
 # Auth stays per-profile (OAuth via /mcp in each), same as any registration.
 _claude_shared_mcp_args() {
   _CLAUDE_MCP_ARGS=()
-  [[ -f "$HOME/.claude/mcp-shared.json" ]] && \
+  # if, not `[[ ]] &&`: a false && list would make this return 1 and kill set -e callers.
+  if [[ -f "$HOME/.claude/mcp-shared.json" ]]; then
     _CLAUDE_MCP_ARGS=(--mcp-config "$HOME/.claude/mcp-shared.json")
+  fi
 }
 
 # ── LiteLLM profile ──────────────────────────────────────────────────

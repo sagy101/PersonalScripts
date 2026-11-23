@@ -75,6 +75,14 @@ case "$profile" in
     ;;
 esac
 
+# Headless boxes: a long-lived subscription token (`claude setup-token`, ~1 year)
+# beats the OAuth refresh dance. Absent on the Mac, so nothing changes there.
+token_file="$HOME/.config/claude-profiles/${profile#claude-}.token"
+if [[ "$profile" == claude-sub* && -f "$token_file" ]]; then
+  CLAUDE_CODE_OAUTH_TOKEN="$(<"$token_file")"
+  export CLAUDE_CODE_OAUTH_TOKEN
+fi
+
 # Shared MCP servers go to a session only. Subcommands (`auth status`, `mcp`,
 # `doctor`, …) reject --mcp-config, and hosts probe auth with them.
 [[ $# -gt 0 && "$1" != -* ]] && _CLAUDE_MCP_ARGS=()

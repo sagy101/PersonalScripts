@@ -32,9 +32,18 @@ mkdir -p ~/Desktop
   chmod 600 ~/Desktop/.env
 }
 
-# Subscription logins (on Linux the token lives in the config dir, not a keychain).
-CLAUDE_CONFIG_DIR=~/.claude claude auth status >/dev/null 2>&1 || CLAUDE_CONFIG_DIR=~/.claude claude auth login
-CLAUDE_CONFIG_DIR=~/.claude-sub2 claude auth status >/dev/null 2>&1 || CLAUDE_CONFIG_DIR=~/.claude-sub2 claude auth login
+# Subscription tokens: one long-lived token per account (~1 year), read by
+# bin/claude-profile-launch. No browser re-login needed until it expires.
+mkdir -p ~/.config/claude-profiles
+chmod 700 ~/.config/claude-profiles
+for p in sub1 sub2; do
+  f=~/.config/claude-profiles/$p.token
+  [[ -s "$f" ]] && continue
+  echo "== $p: sign in with the $p account in the browser; copy the token it prints."
+  claude setup-token
+  read -rsp "Paste the $p token: " t; echo
+  (umask 077; printf '%s' "$t" >"$f")
+done
 
 # Probe all three, exactly as the Mac will call them.
 for p in litellm sub1 sub2; do
