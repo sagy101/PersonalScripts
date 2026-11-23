@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Run a claude-profiles profile on a REMOTE machine (the WSL box set up by
+# remote/windows-setup.ps1 + remote/wsl-setup.sh) over SSH.
+#
+#   claude-remote <litellm|sub1|sub2> [--cwd DIR] [claude args...]
+#       -p "…"      → headless sub-agent; output streams back here
+#       no -p       → interactive session in this terminal (dies with the SSH link)
+#   claude-remote <litellm|sub1|sub2> --session NAME [--cwd DIR] [claude args...]
+#       → persistent agent in the remote herdr server; returns immediately.
+#         Watch/attach:  herdr --remote "$CLAUDE_REMOTE_HOST"
+#
+# Host: $CLAUDE_REMOTE_HOST (default "win", an ~/.ssh/config alias).
+# SSH forwards no env vars, so this session's ANTHROPIC_* / CLAUDE_* never leak
+# into the remote run (the local `env -u` dance is not needed).
+set -euo pipefail
+
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[[ $# -ge 1 ]] || usage
+profile="$1"; shift
+case "$profile" in litellm | sub1 | sub2) ;; *) usage ;; esac
+
+host="${CLAUDE_REMOTE_HOST:-win}"
+# shellcheck disable=SC2088  # ponytail: these ~ must expand on the REMOTE side
+cwd='~/CascadeProjects/AM-PM'
+session=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cwd) cwd="$2"; shift 2 ;;
+    --session) session="$2"; shift 2 ;;
+    *) break ;;
+  esac
+done
+
+# shellcheck disable=SC2088
+launcher="~/PersonalScripts/claude-profiles/bin/claude-$profile"
+args=""
+[[ $# -gt 0 ]] && args="$(printf '%q ' "$@")"
+
+if [[ -n "$session" ]]; then
+  remote="herdr agent start $(printf '%q' "$session") --cwd $cwd --no-focus -- $launcher $args"
+else
+  remote="cd $cwd && exec $launcher $args"
+fi
+
+# Windows OpenSSH re-quotes the command line for bash.exe, so ship the script
+# as base64 (no quotes survive the hop needed) and run it via process
+# substitution — that keeps stdin free for `cat file | claude-remote sub2 -p …`.
+b64="$(printf '%s\n' "$remote" | base64 | tr -d '\n')"
+tty=()
+[[ -z "$session" && -t 0 && " $* " != *" -p "* && " $* " != *" --print "* ]] && tty=(-t)
+exec ssh ${tty[@]+"${tty[@]}"} "$host" "bash -l <(echo $b64 | base64 -d)"

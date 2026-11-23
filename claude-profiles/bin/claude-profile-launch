@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Real *binary* entry points for the claude-profiles profiles, for GUI hosts
+# (T3 Code, editors) that spawn `claude` directly and can't see the zsh
+# functions defined in claude-profiles.sh.
+#
+# Invoked through a symlink named after the profile:
+#   claude-sub1  claude-sub2  claude-sub3  claude-litellm  claude-bedrock-<awsprofile>
+# Put this dir on PATH, or point the host's "Binary path" at the symlink.
+#
+# ponytail: no banners (the host parses stdout as stream-json) and no Headroom
+# wrap (a GUI session has no terminal to hand the proxy). Sources
+# claude-profiles.sh only for its silent helpers — _claude_sync_config,
+# _claude_shared_mcp_args, _to_bedrock_model — so profile logic stays in one place.
+set -eo pipefail
+
+profile="$(basename "$0")"
+# A GUI-spawned process may inherit a minimal PATH; claude/aws/jq live here.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+
+# shellcheck source=../claude-profiles.sh
+source "$HOME/PersonalScripts/claude-profiles/claude-profiles.sh"
+_claude_shared_mcp_args
+
+case "$profile" in
+  claude-sub1)
+    export CLAUDE_CONFIG_DIR="$HOME/.claude"
+    ;;
+  claude-sub2 | claude-sub3)
+    export CLAUDE_CONFIG_DIR="$HOME/.claude-${profile#claude-}"
+    _claude_sync_config "$CLAUDE_CONFIG_DIR"
+    ;;
+  claude-litellm)
+    # Vars live in ~/.zshrc, which a GUI host does not necessarily source.
+    if [[ -z "${CLAUDE_CODE_LITELLM_URL:-}" || -z "${CLAUDE_CODE_LITELLM_KEY:-}" ]]; then
+      eval "$(grep -E '^export CLAUDE_CODE_LITELLM_(URL|KEY)=' "$HOME/.zshrc")"
+    fi
+    # ~/Desktop/.env LITELLM_URL / LITELLM_KEY override the exported vars (same as claude-profiles.sh)
+    env_file="$HOME/Desktop/.env"
+    if [[ -f "$env_file" ]]; then
+      v=$(source "$env_file"; printf '%s' "${LITELLM_URL:-}"); [[ -n "$v" ]] && CLAUDE_CODE_LITELLM_URL="$v"
+      v=$(source "$env_file"; printf '%s' "${LITELLM_KEY:-}"); [[ -n "$v" ]] && CLAUDE_CODE_LITELLM_KEY="$v"
+    fi
+    : "${CLAUDE_CODE_LITELLM_URL:?set CLAUDE_CODE_LITELLM_URL}"
+    : "${CLAUDE_CODE_LITELLM_KEY:?set CLAUDE_CODE_LITELLM_KEY}"
+    export CLAUDE_CONFIG_DIR="$HOME/.claude-litellm"
+    export ANTHROPIC_BASE_URL="$CLAUDE_CODE_LITELLM_URL"
+    export ANTHROPIC_AUTH_TOKEN="$CLAUDE_CODE_LITELLM_KEY"
+    _claude_sync_config "$CLAUDE_CONFIG_DIR"
+    ;;
+  claude-bedrock-*)
+    aws_profile="${profile#claude-bedrock-}"
+    region="$(aws configure get region --profile "$aws_profile" 2>/dev/null || true)"
+    export CLAUDE_CONFIG_DIR="$HOME/.claude-bedrock-$aws_profile"
+    export CLAUDE_CODE_USE_BEDROCK=1
+    export AWS_PROFILE="$aws_profile"
+    export AWS_REGION="${region:-us-east-1}"
+    # No `aws sso login` here: it wants a browser + a terminal, and a GUI host
+    # would just show a hung session. Fail loudly with the fix instead.
+    if ! aws sts get-caller-identity --profile "$aws_profile" &>/dev/null; then
+      echo "SSO session for AWS profile '$aws_profile' is expired." >&2
+      echo "Run in a terminal:  aws sso login --profile $aws_profile" >&2
+      exit 1
+    fi
+    settings="$HOME/.claude/settings.json"
+    for m in OPUS:claude-opus-4-8 SONNET:claude-sonnet-4-6 HAIKU:claude-haiku-4-5; do
+      tier="${m%%:*}"
+      api="$(jq -r ".env.ANTHROPIC_DEFAULT_${tier}_MODEL // empty" "$settings" 2>/dev/null)"
+      export "ANTHROPIC_DEFAULT_${tier}_MODEL=$(_to_bedrock_model "${api:-${m#*:}}")"
+    done
+    _claude_sync_config "$CLAUDE_CONFIG_DIR"
+    ;;
+  *)
+    echo "Unknown profile '$profile' — name the symlink after a claude-profiles profile." >&2
+    exit 1
+    ;;
+esac
+
+# Shared MCP servers go to a session only. Subcommands (`auth status`, `mcp`,
+# `doctor`, …) reject --mcp-config, and hosts probe auth with them.
+[[ $# -gt 0 && "$1" != -* ]] && _CLAUDE_MCP_ARGS=()
+exec claude "$@" "${_CLAUDE_MCP_ARGS[@]}"
