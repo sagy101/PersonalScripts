@@ -124,7 +124,8 @@ A laptop agent cannot call back to this Mac; it only answers on its output. Keep
   backstop with `CLAUDE_REMOTE_MAX`.
 - **Touch ID:** the first connection after ~24 h idle (or after the Mac slept / changed network)
   waits for the user's 1Password approval. If a call hangs at the start, tell the user.
-- **Script size:** about 10 KB of PowerShell or 24 KB of bash per call; send bigger data on stdin.
+- **Size:** one call carries ~5 KB of prompt, ~6 KB of bash or ~3 KB of PowerShell (cmd.exe's
+  8191-character limit); send anything bigger on stdin.
 - **Sandboxed shells can't reach it** (network + the 1Password agent socket).
 - **Secrets:** never put one in a command line; the laptop has its own credentials.
 
