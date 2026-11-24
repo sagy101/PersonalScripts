@@ -21,10 +21,18 @@ if (-not ($distros -match '^Ubuntu')) {
   exit 0
 }
 
+if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw 'winget missing: install "App Installer" from the Microsoft Store, then re-run.' }
+
 # 2. OpenSSH server (default cmd shell): key-only logins, exactly the Mac key.
-# Slow (Windows Update / corporate WSUS, can take 10-30 min), so only when missing.
-if ((Get-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0).State -ne 'Installed') {
-  Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+#    Microsoft's Win32-OpenSSH MSI via winget, not Add-WindowsCapability: corporate
+#    update servers often lack that package (NotPresent, DownloadSize 0) and it hangs.
+if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+  winget install --id Microsoft.OpenSSH.Preview -e --silent --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { throw "winget could not install OpenSSH (exit $LASTEXITCODE)" }
+}
+# Our own named rule (a duplicate of the MSI's, if it made one, is harmless).
+if (-not (Get-NetFirewallRule -Name sshd-agent-box -ErrorAction SilentlyContinue)) {
+  New-NetFirewallRule -Name sshd-agent-box -DisplayName 'OpenSSH Server (agent box)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow | Out-Null
 }
 Set-Service sshd -StartupType Automatic
 Start-Service sshd  # first start also writes the default sshd_config
@@ -40,7 +48,8 @@ $cfg = "$env:ProgramData\ssh\sshd_config"
 if (-not (Select-String -Path $cfg -Pattern '^PasswordAuthentication no' -Quiet)) {
   Set-Content -Path $cfg -Value (@('PasswordAuthentication no') + (Get-Content $cfg)) -Encoding ascii
 }
-& "$env:SystemRoot\System32\OpenSSH\sshd.exe" -t
+$sshdExe = (Get-CimInstance Win32_Service -Filter "Name='sshd'").PathName.Trim('"')
+& $sshdExe -t
 if ($LASTEXITCODE -ne 0) { throw "sshd_config is invalid: $cfg" }
 Restart-Service sshd
 
@@ -87,7 +96,6 @@ Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' 
 Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'
 
 # 6. Windows tools for `claude-remote --win`: Git (Claude Code needs Git Bash), gh, Claude Code.
-if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw 'winget missing: install "App Installer" from the Microsoft Store, then re-run.' }
 foreach ($id in 'Git.Git', 'GitHub.cli') {
   winget list --id $id -e | Out-Null
   if ($LASTEXITCODE -ne 0) { winget install --id $id -e --silent --accept-package-agreements --accept-source-agreements }
