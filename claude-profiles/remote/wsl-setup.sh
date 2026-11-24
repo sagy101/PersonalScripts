@@ -18,8 +18,14 @@ grep -q '.local/bin' ~/.profile || echo 'export PATH="$HOME/.local/bin:$PATH"' >
 winprofile="$(cd /mnt/c && cmd.exe /c 'echo %USERPROFILE%' | tr -d '\r')"
 ln -sfn "$(wslpath "$winprofile")" ~/winhome
 
-# GitHub: borrow the token Windows' gh logged in with (piped, never in argv).
-gh auth status >/dev/null 2>&1 || gh.exe auth token | gh auth login --hostname github.com --with-token
+# GitHub: borrow the token Windows' gh logged in with (piped, never in argv). By absolute
+# path: a shell opened before winget installed gh has no gh.exe on PATH (and under
+# pipefail the failed pipe silently ended this script). Without it, log in here.
+gh_exe="/mnt/c/Program Files/GitHub CLI/gh.exe"
+if ! gh auth status >/dev/null 2>&1; then
+  if [[ -x "$gh_exe" ]]; then "$gh_exe" auth token | gh auth login --hostname github.com --with-token
+  else gh auth login --hostname github.com --git-protocol https --web; fi
+fi
 gh auth setup-git
 
 # Repos.
