@@ -54,10 +54,15 @@ mkdir -p ~/.config/claude-profiles
 chmod 700 ~/.config/claude-profiles
 for p in sub1 sub2; do
   f=~/.config/claude-profiles/$p.token
-  [[ -s "$f" ]] && continue
+  [[ "$(head -c 10 "$f" 2>/dev/null)" == sk-ant-oat ]] && continue
   echo "== $p: sign in with the $p account in the browser; copy the token it prints."
   claude setup-token
-  read -rsp "Paste the $p token: " t; echo
+  # Visible + validated: a hidden prompt silently stored 1-3 byte "tokens" on the first box.
+  while :; do
+    read -rp "Paste the $p token (sk-ant-oat01-…), then Enter: " t
+    [[ "$t" == sk-ant-oat* && ${#t} -gt 50 ]] && break
+    echo "That is not a token — try again."
+  done
   (umask 077; printf '%s' "$t" >"$f")
 done
 
