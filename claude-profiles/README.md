@@ -45,7 +45,7 @@ Agents run on a Windows box — in WSL Ubuntu, or as native Windows `claude.exe`
      IdentitiesOnly yes
      ControlMaster auto                      # one Touch ID approval…
      ControlPath ~/.ssh/cm-%r@%h-%p
-     ControlPersist 8h                       # …then sub-agents reuse the connection for 8h
+     ControlPersist 24h                      # …then sub-agents reuse it until 24h idle
    ```
 
 ```bash
