@@ -8,9 +8,8 @@ set -euo pipefail
 sudo apt-get update -y
 sudo apt-get install -y zsh git jq curl gh
 
-# Claude Code + herdr (both install into ~/.local/bin).
+# Claude Code (installs into ~/.local/bin). herdr runs on the Windows side.
 command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
-command -v herdr >/dev/null || curl -fsSL https://herdr.dev/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 # shellcheck disable=SC2016  # literal $HOME/$PATH, expanded at login
 grep -q '.local/bin' ~/.profile || echo 'export PATH="$HOME/.local/bin:$PATH"' >>~/.profile

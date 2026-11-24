@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Run a claude-profiles profile on a REMOTE machine (the WSL box set up by
-# remote/windows-setup.ps1 + remote/wsl-setup.sh) over SSH.
+# Run a claude-profiles profile on a REMOTE Windows box (set up by
+# remote/windows-setup.ps1 + remote/wsl-setup.sh) over SSH. The agent runs in
+# WSL Ubuntu — or, with --win, as the native Windows claude.exe.
 #
 #   claude-remote <litellm|sub1|sub2> [--cwd DIR] [claude args...]
 #       -p "…"      → headless sub-agent; output streams back here
 #       no -p       → interactive session in this terminal (dies with the SSH link)
 #   claude-remote <litellm|sub1|sub2> --session NAME [--cwd DIR] [claude args...]
-#       → persistent agent in the remote herdr server; returns immediately.
+#       → persistent agent in the box's (Windows) herdr; returns immediately.
+#         NAME: letters, digits, - and _ only.
 #         Watch/attach:  herdr --remote "$CLAUDE_REMOTE_HOST"
 #   --win       → run the native Windows claude.exe instead of the WSL one
 #                 (default cwd: the C: clone, ~/winhome/CascadeProjects/AM-PM)
@@ -16,7 +18,7 @@
 # into the remote run (the local `env -u` dance is not needed).
 set -euo pipefail
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 [[ $# -ge 1 ]] || usage
 profile="$1"; shift
 case "$profile" in litellm | sub1 | sub2) ;; *) usage ;; esac
@@ -40,16 +42,17 @@ launcher="$rhome/PersonalScripts/claude-profiles/bin/claude-$profile"
 args=""
 [[ $# -gt 0 ]] && args="$(printf '%q ' "$@")"
 
-if [[ -n "$session" ]]; then
-  remote="herdr agent start $(printf '%q' "$session") --cwd $cwd --no-focus -- $target$launcher $args"
-else
-  remote="cd $cwd && exec $target$launcher $args"
-fi
+# SSH lands in Windows cmd. Ship the bash script as base64 (only [A-Za-z0-9+/=],
+# so neither cmd nor wsl.exe's argv parsing can mangle it) and run it via
+# process substitution — that keeps stdin free for `cat f | claude-remote sub2 -p …`.
+script="cd $cwd && exec $target$launcher $args"
+b64="$(printf '%s\n' "$script" | base64 | tr -d '\n')"
+wsl="wsl.exe -d Ubuntu -e bash -c \"bash -l <(echo $b64 | base64 -d)\""
 
-# Windows OpenSSH re-quotes the command line for bash.exe, so ship the script
-# as base64 (no quotes survive the hop needed) and run it via process
-# substitution — that keeps stdin free for `cat file | claude-remote sub2 -p …`.
-b64="$(printf '%s\n' "$remote" | base64 | tr -d '\n')"
+if [[ -n "$session" ]]; then
+  [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "--session NAME: letters, digits, - and _ only" >&2; exit 2; }
+  exec ssh "$host" "herdr agent start $session --no-focus -- $wsl"
+fi
 tty=()
-[[ -z "$session" && -t 0 && " $* " != *" -p "* && " $* " != *" --print "* ]] && tty=(-t)
-exec ssh ${tty[@]+"${tty[@]}"} "$host" "bash -l <(echo $b64 | base64 -d)"
+[[ -t 0 && " $* " != *" -p "* && " $* " != *" --print "* ]] && tty=(-t)
+exec ssh ${tty[@]+"${tty[@]}"} "$host" "$wsl"

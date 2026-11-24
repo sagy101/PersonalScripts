@@ -2,10 +2,10 @@
 #   irm https://raw.githubusercontent.com/sagy101/PersonalScripts/main/claude-profiles/remote/windows-setup.ps1 -OutFile $env:TEMP\ws.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\ws.ps1
 # First run installs WSL and asks for a reboot; run the same line again after it.
 #
-# Result: sshd on :22 whose shell is WSL bash (Mac key from remote/mac.pub),
-# never sleeps on AC, screen off after 1 min, lid does nothing, an "Agent mode"
-# desktop shortcut (Ctrl+Alt+K) that locks + blanks the screen, WSL kept alive
-# at logon, Remote Desktop on, Git + gh + native Claude Code, AM-PM cloned to
+# Result: sshd on :22 (default cmd shell; claude-remote calls wsl.exe itself;
+# Mac key from remote/mac.pub), never sleeps on AC, screen off after 1 min, lid
+# does nothing, an "Agent mode" desktop shortcut (Ctrl+Alt+K) that locks +
+# blanks the screen, a herdr server started at logon, Remote Desktop on, Git + gh + native Claude Code, AM-PM cloned to
 # %USERPROFILE%\CascadeProjects\AM-PM — then it runs wsl-setup.sh inside Ubuntu.
 # Re-runnable: every step skips what is already done.
 $ErrorActionPreference = 'Stop'
@@ -13,19 +13,18 @@ $env:WSL_UTF8 = '1'  # else `wsl -l` prints UTF-16 and the Ubuntu check never ma
 $raw = 'https://raw.githubusercontent.com/sagy101/PersonalScripts/main/claude-profiles/remote'
 function Update-Path { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
 
-# 1. WSL + Ubuntu.
-if (-not (Test-Path "$env:SystemRoot\System32\bash.exe") -or -not (wsl.exe -l -q | Select-String Ubuntu)) {
+# 1. WSL + Ubuntu. (Store WSL ships no bash.exe — only the distro list counts.)
+$distros = (wsl.exe -l -q) -replace "`0", ''  # strip UTF-16 NULs if WSL_UTF8 is ignored
+if (-not ($distros -match '^Ubuntu')) {
   wsl.exe --install -d Ubuntu
   Write-Host 'Reboot, open Ubuntu once to create your Linux user, then run the same line again.'
   exit 0
 }
 
-# 2. OpenSSH server, shell = WSL bash, Mac key authorized.
+# 2. OpenSSH server (default cmd shell), Mac key authorized.
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
 Set-Service sshd -StartupType Automatic
 Start-Service sshd
-New-ItemProperty -Path HKLM:\SOFTWARE\OpenSSH -Name DefaultShell `
-  -Value "$env:SystemRoot\System32\bash.exe" -PropertyType String -Force | Out-Null
 $macKey = (Invoke-RestMethod "$raw/mac.pub").Trim()
 # Admin accounts read administrators_authorized_keys (ACL'd to Administrators+SYSTEM), not ~/.ssh.
 $keys = "$env:ProgramData\ssh\administrators_authorized_keys"
@@ -58,12 +57,16 @@ $lnk.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `
 $lnk.Hotkey = 'CTRL+ALT+K'
 $lnk.Save()
 
-# 4. Keep the WSL VM up at logon (it otherwise stops when the last SSH session ends).
-$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wsl.exe" -Argument '-d Ubuntu -e sleep infinity'
+# 4. herdr server at logon, in your desktop session, so `claude-remote --session`
+#    agents (and `herdr --remote` from the Mac) outlive any one SSH connection.
+if (-not (Get-Command herdr -ErrorAction SilentlyContinue)) { Invoke-RestMethod https://herdr.dev/install.ps1 | Invoke-Expression; Update-Path }
+$herdr = (Get-Command herdr).Source
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+  -Argument "-NoProfile -WindowStyle Hidden -Command & '$herdr' server"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName 'keep-wsl-alive' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-Start-ScheduledTask -TaskName 'keep-wsl-alive'
+Register-ScheduledTask -TaskName 'herdr-server' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+Start-ScheduledTask -TaskName 'herdr-server'
 
 # 5. Remote Desktop: the fallback when SSH/WSL is stuck (Windows Pro/Enterprise).
 #    Group id = the locale-independent name of the "Remote Desktop" firewall group.
@@ -91,6 +94,6 @@ if (-not (Test-Path $amPm)) { gh repo clone PFPT-Internal/am-pm $amPm }
 wsl.exe -d Ubuntu -e bash -c "bash <(curl -fsSL $raw/wsl-setup.sh)"
 if ($LASTEXITCODE -ne 0) { throw "wsl-setup.sh failed (exit $LASTEXITCODE)" }
 
-Write-Host "Done. This box: $env:COMPUTERNAME / user $env:USERNAME  (send both to the Mac)"
+Write-Host "Done. This box: $env:COMPUTERNAME / user $env:USERNAME / $(& $herdr --version)  (send all three to the Mac)"
 Write-Host 'Check sleep is not overridden by policy:'
 powercfg /requests
