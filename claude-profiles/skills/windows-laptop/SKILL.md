@@ -46,6 +46,11 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
    absolute paths — .NET calls resolve relative paths against the SSH home, not your `cd`.
 3. Bring changes back as a patch: `remote-wsl "cd $path && git diff" | git apply`
    (for `--win`: `remote-ps 'git -C "$env:USERPROFILE\wt\NAME" diff' | git apply`).
+- **Whole history / all branches** (e.g. scanning every blob): the laptop's clone holds only
+  GitHub's branches and goes stale between syncs (`remote-sync` fetches first; a bare
+  `remote-wsl` on the clone does not). For everything this Mac has, stream it — nothing is
+  written to the Mac's disk: `git bundle create - --all | remote-wsl 'mkdir -p ~/wt/NAME && cat > ~/wt/NAME/all.bundle'`,
+  then `remote-wsl 'git clone -q --bare ~/wt/NAME/all.bundle ~/wt/NAME/repo.git'`.
 4. Clean up when done:
    - WSL: `remote-wsl "git -C ~/CascadeProjects/AM-PM worktree remove --force $path"`
    - `--win`: `remote-ps 'git -C "$env:USERPROFILE\CascadeProjects\AM-PM" worktree remove --force "$env:USERPROFILE\wt\NAME"'`
