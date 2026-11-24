@@ -23,18 +23,26 @@ export CLAUDE_CODE_LITELLM_KEY="sk-your-key"
 source ~/PersonalScripts/claude-profiles/claude-profiles.sh
 ```
 
-## Remote agents (Windows laptop, WSL)
+## Remote agents (Windows laptop: WSL + native Windows)
 
-Agents run on a Windows box (inside WSL Ubuntu); you start them from the Mac.
+Agents run on a Windows box — in WSL Ubuntu, or as native Windows `claude.exe` — and you start them from the Mac.
 
-1. On Windows, elevated PowerShell: `remote/windows-setup.ps1 -MacPubKey "<Mac ~/.ssh/id_ed25519.pub>"`
-   (installs WSL + OpenSSH with WSL bash as shell, no sleep on AC, screen off after 1 min, keeps WSL alive).
-2. Inside Ubuntu: `bash ~/PersonalScripts/claude-profiles/remote/wsl-setup.sh` (tools, launchers, three logins, probe).
-3. On the Mac, `~/.ssh/config`: `Host win` / `HostName <windows-name-or-ip>` / `User <windows-user>`.
+1. On Windows, one line in an **elevated** PowerShell (run it again after the reboot it asks for):
+   ```powershell
+   irm https://raw.githubusercontent.com/sagy101/PersonalScripts/main/claude-profiles/remote/windows-setup.ps1 -OutFile $env:TEMP\ws.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\ws.ps1
+   ```
+   It installs WSL, OpenSSH (shell = WSL bash, Mac key from `remote/mac.pub`), no sleep on AC, screen off after 1 min,
+   keep-WSL-alive, Remote Desktop, Git + gh + Claude Code, clones AM-PM to `C:`, then runs `remote/wsl-setup.sh`.
+   You only: create the Ubuntu user, one `gh` browser login, paste the LiteLLM URL/key, and run `claude setup-token`
+   for sub1 and sub2 (long-lived, ~1 year; shared by the WSL and Windows runs). It ends by probing all 6 combinations.
+2. On the Mac, `~/.ssh/config`: `Host win` / `HostName <windows-name>` / `User <windows-user>` /
+   `IdentityFile ~/.ssh/id_ed25519` / `IdentitiesOnly yes`.
 
 ```bash
-claude-remote sub2 -p "review the diff"              # headless sub-agent, output here
-claude-remote litellm                                # interactive, in this terminal
-claude-remote sub1 --session rev1 --cwd '~/x'          # persistent herdr session there (quote the ~)
-herdr --remote win                                   # watch / attach to those
+claude-remote sub2 -p "review the diff"               # headless sub-agent in WSL, output here
+claude-remote sub2 --win -p "review the diff"         # same, native Windows claude.exe (C: clone)
+claude-remote litellm                                 # interactive, in this terminal
+claude-remote sub1 --session rev1 --cwd '~/x'         # persistent herdr session there (quote the ~)
+herdr --remote win                                    # watch / attach to those
 ```
+Lock the box with Win+L; never sign out (that stops keep-WSL-alive). Desktop fallback: Remote Desktop.

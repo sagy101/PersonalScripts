@@ -8,38 +8,42 @@
 #   claude-remote <litellm|sub1|sub2> --session NAME [--cwd DIR] [claude args...]
 #       → persistent agent in the remote herdr server; returns immediately.
 #         Watch/attach:  herdr --remote "$CLAUDE_REMOTE_HOST"
+#   --win       → run the native Windows claude.exe instead of the WSL one
+#                 (default cwd: the C: clone, ~/winhome/CascadeProjects/AM-PM)
 #
 # Host: $CLAUDE_REMOTE_HOST (default "win", an ~/.ssh/config alias).
 # SSH forwards no env vars, so this session's ANTHROPIC_* / CLAUDE_* never leak
 # into the remote run (the local `env -u` dance is not needed).
 set -euo pipefail
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 [[ $# -ge 1 ]] || usage
 profile="$1"; shift
 case "$profile" in litellm | sub1 | sub2) ;; *) usage ;; esac
 
 host="${CLAUDE_REMOTE_HOST:-win}"
-# shellcheck disable=SC2088  # ponytail: these ~ must expand on the REMOTE side
-cwd='~/CascadeProjects/AM-PM'
+cwd=""
 session=""
+target=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cwd) cwd="$2"; shift 2 ;;
     --session) session="$2"; shift 2 ;;
+    --win) target="env CLAUDE_PROFILE_TARGET=windows "; shift ;;
     *) break ;;
   esac
 done
-
-# shellcheck disable=SC2088
-launcher="~/PersonalScripts/claude-profiles/bin/claude-$profile"
+rhome='~' # ponytail: quoted on purpose — expands on the REMOTE side
+if [[ -z "$cwd" && -n "$target" ]]; then cwd="$rhome/winhome/CascadeProjects/AM-PM"
+elif [[ -z "$cwd" ]]; then cwd="$rhome/CascadeProjects/AM-PM"; fi
+launcher="$rhome/PersonalScripts/claude-profiles/bin/claude-$profile"
 args=""
 [[ $# -gt 0 ]] && args="$(printf '%q ' "$@")"
 
 if [[ -n "$session" ]]; then
-  remote="herdr agent start $(printf '%q' "$session") --cwd $cwd --no-focus -- $launcher $args"
+  remote="herdr agent start $(printf '%q' "$session") --cwd $cwd --no-focus -- $target$launcher $args"
 else
-  remote="cd $cwd && exec $launcher $args"
+  remote="cd $cwd && exec $target$launcher $args"
 fi
 
 # Windows OpenSSH re-quotes the command line for bash.exe, so ship the script

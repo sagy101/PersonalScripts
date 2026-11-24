@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
-# Linux half of the remote agent box. Run inside WSL Ubuntu as your user,
-# after windows-setup.ps1:   bash wsl-setup.sh
-# Interactive on purpose: GitHub auth and the three account logins need you.
+# Linux half of the remote agent box. windows-setup.ps1 runs this inside WSL
+# Ubuntu at its end; re-runnable by hand:
+#   bash ~/PersonalScripts/claude-profiles/remote/wsl-setup.sh
+# Interactive only for the LiteLLM key and the two subscription tokens.
 set -euo pipefail
 
 sudo apt-get update -y
-sudo apt-get install -y zsh git jq curl
+sudo apt-get install -y zsh git jq curl gh
 
 # Claude Code + herdr (both install into ~/.local/bin).
 command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
 command -v herdr >/dev/null || curl -fsSL https://herdr.dev/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
+# shellcheck disable=SC2016  # literal $HOME/$PATH, expanded at login
 grep -q '.local/bin' ~/.profile || echo 'export PATH="$HOME/.local/bin:$PATH"' >>~/.profile
 
-# Repos. Needs a GitHub key/token for this WSL user (run `gh auth login` or add an SSH key first).
-[[ -d ~/PersonalScripts ]] || git clone git@github.com:sagy101/PersonalScripts.git ~/PersonalScripts
+# Windows home, for `claude-remote --win` (config dirs, claude.exe, the C: clone).
+winprofile="$(cd /mnt/c && cmd.exe /c 'echo %USERPROFILE%' | tr -d '\r')"
+ln -sfn "$(wslpath "$winprofile")" ~/winhome
+
+# GitHub: borrow the token Windows' gh logged in with (piped, never in argv).
+gh auth status >/dev/null 2>&1 || gh.exe auth token | gh auth login --hostname github.com --with-token
+gh auth setup-git
+
+# Repos.
+[[ -d ~/PersonalScripts ]] || gh repo clone sagy101/PersonalScripts ~/PersonalScripts
 mkdir -p ~/CascadeProjects
-[[ -d ~/CascadeProjects/AM-PM ]] || { echo 'Clone AM-PM into ~/CascadeProjects/AM-PM, then re-run.'; exit 1; }
+[[ -d ~/CascadeProjects/AM-PM ]] || gh repo clone PFPT-Internal/am-pm ~/CascadeProjects/AM-PM
 
 # Same launchers as the Mac.
 grep -q claude-profiles.sh ~/.zshrc 2>/dev/null ||
@@ -28,12 +38,11 @@ mkdir -p ~/Desktop
 [[ -f ~/Desktop/.env ]] || {
   read -rp 'LITELLM_URL: ' u
   read -rsp 'LITELLM_KEY: ' k; echo
-  printf 'LITELLM_URL=%s\nLITELLM_KEY=%s\n' "$u" "$k" >~/Desktop/.env
-  chmod 600 ~/Desktop/.env
+  (umask 077; printf 'LITELLM_URL=%s\nLITELLM_KEY=%s\n' "$u" "$k" >~/Desktop/.env)
 }
 
 # Subscription tokens: one long-lived token per account (~1 year), read by
-# bin/claude-profile-launch. No browser re-login needed until it expires.
+# bin/claude-profile-launch for both the WSL and the Windows claude.
 mkdir -p ~/.config/claude-profiles
 chmod 700 ~/.config/claude-profiles
 for p in sub1 sub2; do
@@ -45,8 +54,11 @@ for p in sub1 sub2; do
   (umask 077; printf '%s' "$t" >"$f")
 done
 
-# Probe all three, exactly as the Mac will call them.
+# Probe all six (3 profiles × WSL/Windows), exactly as the Mac will call them.
+bin=~/PersonalScripts/claude-profiles/bin
 for p in litellm sub1 sub2; do
-  printf '%s: ' "$p"
-  (cd ~/CascadeProjects/AM-PM && ~/PersonalScripts/claude-profiles/bin/claude-$p -p 'Reply with exactly: ok' </dev/null) || echo FAILED
+  printf 'wsl %s: ' "$p"
+  (cd ~/CascadeProjects/AM-PM && "$bin/claude-$p" -p 'Reply with exactly: ok' </dev/null) || echo FAILED
+  printf 'win %s: ' "$p"
+  (cd ~/winhome/CascadeProjects/AM-PM && CLAUDE_PROFILE_TARGET=windows "$bin/claude-$p" -p 'Reply with exactly: ok' </dev/null) || echo FAILED
 done

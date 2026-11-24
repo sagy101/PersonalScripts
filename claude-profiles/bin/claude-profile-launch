@@ -83,6 +83,19 @@ if [[ "$profile" == claude-sub* && -f "$token_file" ]]; then
   export CLAUDE_CODE_OAUTH_TOKEN
 fi
 
+# CLAUDE_PROFILE_TARGET=windows (claude-remote --win, on the WSL box): same
+# profile env, but run the native Windows claude.exe through WSL interop.
+# Its config lives in the Windows home (~/winhome, linked by wsl-setup.sh);
+# WSLENV carries the env across; Linux-path MCP args don't apply there.
+if [[ "${CLAUDE_PROFILE_TARGET:-}" == windows ]]; then
+  winhome="$HOME/winhome"
+  [[ -x "$winhome/.local/bin/claude.exe" ]] || { echo "No Windows claude.exe at $winhome/.local/bin — run wsl-setup.sh" >&2; exit 1; }
+  case "$profile" in claude-sub1) cfg=.claude ;; *) cfg=".claude-${profile#claude-}" ;; esac
+  export CLAUDE_CONFIG_DIR="$winhome/$cfg"
+  export WSLENV="CLAUDE_CONFIG_DIR/p:CLAUDE_CODE_OAUTH_TOKEN:ANTHROPIC_BASE_URL:ANTHROPIC_AUTH_TOKEN${WSLENV:+:$WSLENV}"
+  exec "$winhome/.local/bin/claude.exe" "$@"
+fi
+
 # Shared MCP servers go to a session only. Subcommands (`auth status`, `mcp`,
 # `doctor`, …) reject --mcp-config, and hosts probe auth with them.
 [[ $# -gt 0 && "$1" != -* ]] && _CLAUDE_MCP_ARGS=()
