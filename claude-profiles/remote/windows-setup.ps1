@@ -2,7 +2,7 @@
 #   irm https://raw.githubusercontent.com/sagy101/PersonalScripts/main/claude-profiles/remote/windows-setup.ps1 -OutFile $env:TEMP\ws.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\ws.ps1
 # First run installs WSL and asks for a reboot; run the same line again after it.
 #
-# Result: sshd on :22 (default cmd shell; claude-remote calls wsl.exe itself;
+# Result: sshd on :22 run as you by a logon task (default cmd shell; claude-remote calls wsl.exe itself;
 # Mac key from remote/mac.pub), never sleeps on AC, screen off after 1 min, lid
 # does nothing, an "Agent mode" desktop shortcut (Ctrl+Alt+K) that locks +
 # blanks the screen, a herdr server started at logon, Remote Desktop on, Git + gh + native Claude Code, AM-PM cloned to
@@ -34,24 +34,43 @@ if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
 if (-not (Get-NetFirewallRule -Name sshd-agent-box -ErrorAction SilentlyContinue)) {
   New-NetFirewallRule -Name sshd-agent-box -DisplayName 'OpenSSH Server (agent box)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow | Out-Null
 }
-Set-Service sshd -StartupType Automatic
-Start-Service sshd  # first start also writes the default sshd_config
+$sshdExe = (Get-CimInstance Win32_Service -Filter "Name='sshd'").PathName.Trim('"')
+$cfg = "$env:ProgramData\ssh\sshd_config"
+if (-not (Test-Path $cfg)) { Start-Service sshd; Start-Sleep 3 }  # first start writes sshd_config + host keys
 $macKey = (Invoke-RestMethod "$raw/mac.pub").Trim()
 # Admin accounts read administrators_authorized_keys (ACL'd to Administrators+SYSTEM), not ~/.ssh.
 # Overwritten, not appended: a rotated mac.pub must also revoke the old key.
 $keys = "$env:ProgramData\ssh\administrators_authorized_keys"
 Set-Content -Path $keys -Value $macKey -Encoding ascii
 icacls.exe $keys /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
+# …and the per-user file: on this corp domain the admin file alone did not get the key accepted.
+$me = "$env:USERDOMAIN\$env:USERNAME"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+Set-Content -Path "$env:USERPROFILE\.ssh\authorized_keys" -Value $macKey -Encoding ascii
+icacls.exe "$env:USERPROFILE\.ssh\authorized_keys" /inheritance:r /grant "${me}:F" /grant 'SYSTEM:F' | Out-Null
 # No passwords: nobody on the network can guess their way into this admin account.
 # First line, because sshd keeps the first value of a keyword (the default file ends in a Match block).
-$cfg = "$env:ProgramData\ssh\sshd_config"
 if (-not (Select-String -Path $cfg -Pattern '^PasswordAuthentication no' -Quiet)) {
   Set-Content -Path $cfg -Value (@('PasswordAuthentication no') + (Get-Content $cfg)) -Encoding ascii
 }
-$sshdExe = (Get-CimInstance Win32_Service -Filter "Name='sshd'").PathName.Trim('"')
 & $sshdExe -t
 if ($LASTEXITCODE -ne 0) { throw "sshd_config is invalid: $cfg" }
-Restart-Service sshd
+# Run sshd as YOU (logon task, elevated), not as the SYSTEM service. The service must log
+# a domain account on without a password (S4U), which this corp domain refuses (Security
+# 4625, 0xC0000064 → every session reset right after auth); an S4U session also could not
+# reach Credential Manager (gh/git) or WSL. Non-SYSTEM sshd can only log in this one user — all we need.
+Stop-Service sshd -ErrorAction SilentlyContinue
+Set-Service sshd -StartupType Disabled
+Get-Process sshd -ErrorAction SilentlyContinue | Stop-Process -Force  # a previous run's listener holds :22
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+  -Argument "-NoProfile -WindowStyle Hidden -Command & '$sshdExe'"
+$principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $me
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName 'sshd-user' -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force | Out-Null
+Start-ScheduledTask -TaskName 'sshd-user'
+Start-Sleep 3
+if (-not (Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)) { throw 'sshd-user task started but nothing listens on :22' }
 
 # 3. Power: awake forever on AC, screen off after 1 min, lid = do nothing.
 powercfg /change standby-timeout-ac 0
@@ -110,6 +129,16 @@ if ($LASTEXITCODE -ne 0) { gh auth login --hostname github.com --git-protocol ht
 gh auth setup-git
 $amPm = "$env:USERPROFILE\CascadeProjects\AM-PM"
 if (-not (Test-Path $amPm)) { gh repo clone PFPT-Internal/am-pm $amPm }
+
+# 7b. WSL networking: the default NAT mode cannot get out over GlobalProtect (curl timed out);
+#     mirrored mode shares Windows' interfaces (VPN included) and DNS.
+$wslcfg = "$env:USERPROFILE\.wslconfig"
+if (-not ((Test-Path $wslcfg) -and (Select-String -Path $wslcfg -Pattern '^networkingMode=mirrored' -Quiet))) {
+  Add-Content -Path $wslcfg -Value "[wsl2]`nnetworkingMode=mirrored`ndnsTunneling=true" -Encoding ascii
+  wsl.exe --shutdown
+}
+wsl.exe -d Ubuntu -e bash -c "curl -sS -m 15 -o /dev/null https://github.com"
+if ($LASTEXITCODE -ne 0) { throw 'WSL still has no internet (curl github.com failed) — send this to the Mac.' }
 
 # 8. Linux half (interactive: LiteLLM key + the two subscription tokens).
 # Download to a file first: with `bash <(curl …)` a failed download ran an empty script and exited 0.

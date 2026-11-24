@@ -35,9 +35,11 @@ grep -q claude-profiles.sh ~/.zshrc 2>/dev/null ||
 # LiteLLM key: same file name the launchers read on the Mac.
 mkdir -p ~/Desktop
 [[ -f ~/Desktop/.env ]] || {
-  read -rp 'LITELLM_URL: ' u
-  read -rsp 'LITELLM_KEY: ' k; echo
-  (umask 077; printf 'LITELLM_URL=%s\nLITELLM_KEY=%s\n' "$u" "$k" >~/Desktop/.env)
+  read -rp 'LITELLM_URL (Enter = skip, the Mac copies it over SSH later): ' u
+  if [[ -n "$u" ]]; then
+    read -rsp 'LITELLM_KEY: ' k; echo
+    (umask 077; printf 'LITELLM_URL=%s\nLITELLM_KEY=%s\n' "$u" "$k" >~/Desktop/.env)
+  fi
 }
 
 # Subscription tokens: one long-lived token per account (~1 year), read by
