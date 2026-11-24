@@ -34,6 +34,7 @@ if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
 if (-not (Get-NetFirewallRule -Name sshd-agent-box -ErrorAction SilentlyContinue)) {
   New-NetFirewallRule -Name sshd-agent-box -DisplayName 'OpenSSH Server (agent box)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow | Out-Null
 }
+New-Item -ItemType Directory -Force "$env:USERPROFILE\agent-box" | Out-Null
 $sshdExe = (Get-CimInstance Win32_Service -Filter "Name='sshd'").PathName.Trim('"')
 $cfg = "$env:ProgramData\ssh\sshd_config"
 if (-not (Test-Path $cfg)) { Start-Service sshd; Start-Sleep 3 }  # first start writes sshd_config + host keys
@@ -55,22 +56,34 @@ if (-not (Select-String -Path $cfg -Pattern '^PasswordAuthentication no' -Quiet)
 }
 & $sshdExe -t
 if ($LASTEXITCODE -ne 0) { throw "sshd_config is invalid: $cfg" }
-# Run sshd as YOU (logon task, elevated), not as the SYSTEM service. The service must log
+# Run sshd as YOU (logon task), not as the SYSTEM service. The service must log
 # a domain account on without a password (S4U), which this corp domain refuses (Security
 # 4625, 0xC0000064 → every session reset right after auth); an S4U session also could not
 # reach Credential Manager (gh/git) or WSL. Non-SYSTEM sshd can only log in this one user — all we need.
 Stop-Service sshd -ErrorAction SilentlyContinue
 Set-Service sshd -StartupType Disabled
 Get-Process sshd -ErrorAction SilentlyContinue | Stop-Process -Force  # a previous run's listener holds :22
+# The task's sshd runs unelevated (RunLevel Highest notwithstanding): it cannot read the
+# SYSTEM/Admins-only host key ("no hostkeys available"). Give it its own copy — the SAME key,
+# so the fingerprint the Mac pinned stays valid — and read access to the admin key list.
+$hostKey = "$env:USERPROFILE\agent-box\ssh_host_ed25519_key"
+Copy-Item "$env:ProgramData\ssh\ssh_host_ed25519_key" $hostKey -Force
+icacls.exe $hostKey /setowner $me | Out-Null
+icacls.exe $hostKey /inheritance:r /grant "${me}:F" /grant 'SYSTEM:F' | Out-Null
+icacls.exe $keys /grant "${me}:R" | Out-Null
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-  -Argument "-NoProfile -WindowStyle Hidden -Command & '$sshdExe' -D"  # -D: outside the service sshd otherwise "daemonizes" = exits
+  -Argument "-NoProfile -WindowStyle Hidden -Command & '$sshdExe' -D -h '$hostKey' -E '$env:USERPROFILE\agent-box\sshd.log'"
+  # -D: outside the service sshd otherwise "daemonizes" = exits. -E: log to a file (the hidden window swallows errors).
 $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $me
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName 'sshd-user' -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName 'sshd-user'
-Start-Sleep 3
-if (-not (Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)) { throw 'sshd-user task started but nothing listens on :22' }
+foreach ($i in 1..15) { if (Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue) { break }; Start-Sleep 1 }
+if (-not (Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)) {
+  Get-Content "$env:USERPROFILE\agent-box\sshd.log" -Tail 20 -ErrorAction SilentlyContinue
+  throw "sshd-user task started but nothing listens on :22 (task result $((Get-ScheduledTaskInfo sshd-user).LastTaskResult); log above)"
+}
 
 # 3. Power: awake forever on AC, screen off after 1 min, lid = do nothing.
 powercfg /change standby-timeout-ac 0
