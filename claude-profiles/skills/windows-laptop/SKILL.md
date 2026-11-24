@@ -70,6 +70,7 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
        pg = b.new_page(); pg.goto("https://example.com"); print(pg.title())
        pg.screenshot(path=r"C:\Users\sashlag\agent-box\shot.png"); b.close()
    ```
+   Fetch files back byte-for-byte: `remote-wsl 'cat ~/winhome/agent-box/shot.png' > shot.png`.
 3. **The real desktop**, only when 1 and 2 truly can't do it (a native app, a UAC/installer
    dialog, something only visible on screen):
    - `remote-screen` — free to use; prints the coordinate space on stderr. While the laptop is
@@ -82,6 +83,9 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
    - Actions: `click X Y`, `doubleclick X Y`, `rightclick X Y`, `move X Y`, `scroll N`,
      `type TEXT`, `key KEYS` (SendKeys: `{ENTER}`, `{TAB}`, `^l`, `%{F4}`). Take a
      `remote-screen` before and after; click into a field before typing.
+   - Every SSH command opens a console window on the laptop's desktop (invisible while it is
+     locked). Before clicking, `remote-screen` and aim at what is actually on top; never type
+     into a console window — it may be another agent's run.
    - **Never** send mouse/keyboard input any other way (SendKeys or user32 via `remote-ps`,
      AutoHotkey, …): that would bypass the user's approval.
 
