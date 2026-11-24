@@ -80,6 +80,9 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
      user's Mac showing your `--goal` (what the session is trying to achieve) and
      `--why-not-cli` (why 1 and 2 can't do it). Write both honestly and specifically; the user
      decides on them. A time-window approval covers only your session and that exact goal.
+   - **Known issue (until fixed):** each SSH command opens a console window on the laptop that
+     takes focus — including remote-input's own — so remote-input often refuses with exit 5.
+     Prefer the headless browser; if exit 5 repeats, stop and tell the user.
    - **One agent at a time:** the first approved session holds the desktop; others get exit 6
      at once (no dialog) naming the holder and until when. Wait and retry later, or tell the
      user — don't loop. The lease ends 3 min after the holder's last input; when you're done,
