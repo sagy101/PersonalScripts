@@ -112,7 +112,8 @@ $amPm = "$env:USERPROFILE\CascadeProjects\AM-PM"
 if (-not (Test-Path $amPm)) { gh repo clone PFPT-Internal/am-pm $amPm }
 
 # 8. Linux half (interactive: LiteLLM key + the two subscription tokens).
-wsl.exe -d Ubuntu -e bash -c "bash <(curl -fsSL $raw/wsl-setup.sh)"
+# Download to a file first: with `bash <(curl …)` a failed download ran an empty script and exited 0.
+wsl.exe -d Ubuntu -e bash -c "curl -fsSL $raw/wsl-setup.sh -o /tmp/wsl-setup.sh && bash /tmp/wsl-setup.sh"
 if ($LASTEXITCODE -ne 0) { throw "wsl-setup.sh failed (exit $LASTEXITCODE)" }
 
 Write-Host "Done. This box: $env:COMPUTERNAME / user $env:USERNAME / $(& $herdr --version)  (send all three to the Mac)"
