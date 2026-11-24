@@ -80,6 +80,10 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
      user's Mac showing your `--goal` (what the session is trying to achieve) and
      `--why-not-cli` (why 1 and 2 can't do it). Write both honestly and specifically; the user
      decides on them. A time-window approval covers only your session and that exact goal.
+   - **One agent at a time:** the first approved session holds the desktop; others get exit 6
+     at once (no dialog) naming the holder and until when. Wait and retry later, or tell the
+     user — don't loop. The lease ends 3 min after the holder's last input; when you're done,
+     free it right away: `remote-input --release`.
    - `--window "Title"` is required: the window under the point (clicks) or the focused
      window (typing/keys) must have that text in its title, checked before the dialog and
      again right before acting; otherwise exit 5 and nothing is sent. Windows move — take a
@@ -122,6 +126,7 @@ A laptop agent cannot call back to this Mac; it only answers on its output. Keep
 | `cannot reach 'win'` / timeout | laptop asleep, off GlobalProtect, or its address moved | Tell the user; don't retry in a loop |
 | Hangs before any output | waiting for Touch ID | Tell the user to approve 1Password |
 | `exit 75` | agent cap reached | Wait, check `remote-load` |
+| `remote-input` exit 3 / 4 / 5 / 6 | locked / user denied / wrong window / another agent has the desktop | Ask user to unlock / stop / fresh `remote-screen` / wait |
 | `Permission denied (publickey)` | key/user config broke | Tell the user — don't edit SSH config |
 | `hit your weekly limit` | that subscription is exhausted | Use another profile |
 

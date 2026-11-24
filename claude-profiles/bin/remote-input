@@ -15,9 +15,21 @@
 # detail line): Deny (default) / Allow once / Allow for… 10, 30, 60, 120, 240 or 480 min —
 # a time window covers this same goal from this same Claude session only (subagents share
 # their parent's session). No answer in 2 min = Deny (exit 4).
+# One agent at a time (one pointer, one focus): the first approved session holds a lease on the
+# desktop; other sessions get exit 6 at once (no dialog) until it ends — 3 min after that
+# session's last input — or until `remote-input --release` (the user, or the holder when done).
 # Audit log: ~/.cache/remote-input/log.   Host: $CLAUDE_REMOTE_HOST (default "win").
 set -euo pipefail
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+dir="$HOME/.cache/remote-input"; mkdir -p "$dir"
+lease="$dir/lease"   # "<expiry-epoch> <session> <goal as base64>"
+# ponytail: mkdir as the lock (macOS has no flock); a holder killed mid-update leaves it for ≤10 s.
+lock() { local i=0; until mkdir "$dir/lease.lock" 2>/dev/null; do i=$((i + 1)); [[ $i -lt 100 ]] || rmdir "$dir/lease.lock" 2>/dev/null || true; sleep 0.1; done; }
+unlock() { rmdir "$dir/lease.lock"; }
+# Prints the holder line when ANOTHER session holds a live lease.
+held_by_other() { [[ -f "$lease" ]] && awk -v n="$(date +%s)" -v me="$1" '$1 > n && $2 != me { print; f = 1 } END { exit !f }' "$lease"; }
+put_lease() { echo "$(( $(date +%s) + 180 )) $session $(printf '%s' "$goal" | base64 | tr -d '\n')" > "$lease"; }
+if [[ "${1:-}" == --release ]]; then lock; rm -f "$lease"; unlock; echo "remote-input: desktop lease released"; exit 0; fi
 goal="" why="" win=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -80,6 +92,15 @@ switch (\$verb) {
 PS
 }
 
+# 0. Another agent holds the desktop → refuse now; the user isn't asked.
+#    Who asks: the Claude session (shared with its subagents); outside Claude, the parent process.
+session="${CLAUDE_CODE_SESSION_ID:-pid-$PPID}"
+if holder="$(held_by_other "$session")"; then
+  read -r until who g64 <<<"$holder"
+  echo "remote-input: the desktop is in use by Claude session ${who:0:8} (goal: $(printf '%s' "$g64" | base64 -d)) until $(date -r "$until" +%H:%M:%S) at the latest. Wait and retry, or tell the user (they can free it: remote-input --release)." >&2
+  exit 6
+fi
+
 # 1. Locked → nothing to approve.
 if [[ "$("$bin/remote-ps" '[bool](Get-Process LogonUI -ErrorAction SilentlyContinue)' | tr -d '\r')" == True ]]; then
   echo "remote-input: the laptop is locked — input can't reach its apps. Ask the user to unlock it or connect via Remote Desktop." >&2
@@ -88,9 +109,6 @@ fi
 send 1 >/dev/null  # wrong window → exit 5 here, before the user is asked anything
 
 # 2. The user's approval: an open window for this goal, or the dialog.
-dir="$HOME/.cache/remote-input"; mkdir -p "$dir"
-# Who asks: the Claude session (shared with its subagents); outside Claude, the parent process.
-session="${CLAUDE_CODE_SESSION_ID:-pid-$PPID}"
 asker="Claude session ${session:0:8} in ${PWD/#$HOME/~}"
 key="$(printf '%s\n%s' "$session" "$goal" | shasum -a 256 | cut -c1-16)"
 now="$(date +%s)"
@@ -128,6 +146,14 @@ fi
 printf '%s %s key=%s session=%s window=%q action=%q goal=%q\n' "$(date -u +%FT%TZ)" "$verdict" "$key" "${session:0:8}" "$win" "$action" "$goal" >> "$dir/log"
 [[ "$verdict" != denied ]] || { echo "remote-input: the user denied (or didn't answer within 2 min)" >&2; exit 4; }
 
+# Take (or keep) the lease — re-checked under the lock: another session may have won it while
+# the dialog was open.
+lock
+if held_by_other "$session" >/dev/null; then unlock; echo "remote-input: another session took the desktop while you waited — retry later" >&2; exit 6; fi
+put_lease
+unlock
+
 # 3. Do it (send 0) — re-checking the window right before acting. Text travels base64 so
 #    nothing in it can break the PowerShell.
 send 0
+lock; if ! held_by_other "$session" >/dev/null; then put_lease; fi; unlock   # the 3-min idle clock restarts
