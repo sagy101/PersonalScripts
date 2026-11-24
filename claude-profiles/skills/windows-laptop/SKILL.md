@@ -33,12 +33,22 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
 
 ## Work on code there
 
-1. `path=$(remote-sync)` (or `remote-sync --win`) inside the repo. It copies commits **and**
+1. `path=$(remote-sync [--win] [NAME])` inside the repo. It copies your commits **and**
    uncommitted/untracked edits into a fresh worktree, without pushing. One worktree per task.
-2. Run in it: `claude-remote sub1 --cwd "$path" -p "…"` or `remote-wsl "cd $path && make test"`.
+   - The worktree's HEAD is **merge-base(HEAD, origin/main)**, not your HEAD; everything you
+     changed since then sits on top as uncommitted changes, so `git diff` there = your whole change.
+   - Untracked files that look like secrets (`.env*`, keys, `*credentials*.json`, …) are
+     never copied; it lists them on stderr.
+   - It prints a WSL path (`~/wt/NAME`, or `~/winhome/wt/NAME` for `--win`). The Windows form
+     of a `--win` path is `$env:USERPROFILE\wt\NAME`.
+2. Run in it: `claude-remote sub1 [--win] --cwd "$path" -p "…"`, `remote-wsl "cd $path && make test"`,
+   or for `--win`: `remote-ps 'git -C "$env:USERPROFILE\wt\NAME" status'`. In PowerShell use
+   absolute paths — .NET calls resolve relative paths against the SSH home, not your `cd`.
 3. Bring changes back as a patch: `remote-wsl "cd $path && git diff" | git apply`
-   (for `--win`: `remote-ps "git -C $env:USERPROFILE\wt\NAME diff"`).
-4. Clean up: `remote-wsl "git -C ~/CascadeProjects/AM-PM worktree remove --force $path"`.
+   (for `--win`: `remote-ps 'git -C "$env:USERPROFILE\wt\NAME" diff' | git apply`).
+4. Clean up when done:
+   - WSL: `remote-wsl "git -C ~/CascadeProjects/AM-PM worktree remove --force $path"`
+   - `--win`: `remote-ps 'git -C "$env:USERPROFILE\CascadeProjects\AM-PM" worktree remove --force "$env:USERPROFILE\wt\NAME"'`
 
 ## Talk to a remote agent
 
