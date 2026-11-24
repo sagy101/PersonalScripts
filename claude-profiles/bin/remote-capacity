@@ -9,7 +9,8 @@ set -euo pipefail
 max_agents="${1:-16}" min_free="${2:-4096}" max_cpu="${3:-85}"
 n="$(ps -eo comm= | grep -cx -e claude -e claude.exe || true)"
 read -r free cpu < <(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -NonInteractive -Command \
-  '$o = Get-CimInstance Win32_OperatingSystem; $c = (Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average; "{0} {1}" -f [int]($o.FreePhysicalMemory / 1024), [int]$c' | tr -d '\r')
+  '$o = Get-CimInstance Win32_OperatingSystem; $c = (Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average; "{0} {1}" -f [int]($o.FreePhysicalMemory / 1024), [int]$c' </dev/null | tr -d '\r')
+# ^ </dev/null: powershell.exe would otherwise swallow the agent's stdin (a piped -p prompt).
 why=""
 if [ "$n" -ge "$max_agents" ]; then why="$n agents already run (backstop $max_agents)"; fi
 if [ "$free" -lt "$min_free" ]; then why="only $free MB RAM free (needs $min_free)"; fi
