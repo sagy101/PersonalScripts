@@ -115,8 +115,21 @@ $lnk.Save()
 #    agents (and `herdr --remote` from the Mac) outlive any one SSH connection.
 if (-not (Get-Command herdr -ErrorAction SilentlyContinue)) { Invoke-RestMethod https://herdr.dev/install.ps1 | Invoke-Expression; Update-Path }
 $herdr = (Get-Command herdr).Source
+# Stable entry point: herdr installs into a per-version folder (changes on `herdr update`), and
+# SSH sessions here don't get the user PATH. This shim always runs the newest release.
+$herdrCmd = "$box\herdr.cmd"
+Set-Content -Path $herdrCmd -Encoding ascii -Value @'
+@echo off
+setlocal
+set "R=%USERPROFILE%\.herdr\packages\standalone\releases"
+for /f "delims=" %%d in ('dir /b /ad /o-d "%R%" 2^>nul') do (set "H=%R%\%%d\herdr.exe" & goto run)
+echo herdr not found under %R% 1>&2
+exit /b 1
+:run
+"%H%" %*
+'@
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-  -Argument "-NoProfile -WindowStyle Hidden -Command & '$herdr' server"
+  -Argument "-NoProfile -WindowStyle Hidden -Command & '$herdrCmd' server"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName 'herdr-server' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null

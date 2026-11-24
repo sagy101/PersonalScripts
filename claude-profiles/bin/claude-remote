@@ -9,7 +9,8 @@
 #   claude-remote <litellm|sub1|sub2> --session NAME [--cwd DIR] [claude args...]
 #       → persistent agent in the box's (Windows) herdr; returns immediately.
 #         NAME: letters, digits, - and _ only.
-#         Watch/attach:  herdr --remote "$CLAUDE_REMOTE_HOST"
+#         Opens a tab NAME in the box's herdr workspace "agents".
+#         Watch/attach:  ssh -t "$CLAUDE_REMOTE_HOST" agent-box\\herdr.cmd
 #   --win       → run the native Windows claude.exe instead of the WSL one
 #                 (default cwd: the C: clone, ~/winhome/CascadeProjects/AM-PM)
 #
@@ -18,7 +19,7 @@
 # into the remote run (the local `env -u` dance is not needed).
 set -euo pipefail
 
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 [[ $# -ge 1 ]] || usage
 profile="$1"; shift
 case "$profile" in litellm | sub1 | sub2) ;; *) usage ;; esac
@@ -42,16 +43,26 @@ launcher="$rhome/PersonalScripts/claude-profiles/bin/claude-$profile"
 args=""
 [[ $# -gt 0 ]] && args="$(printf '%q ' "$@")"
 
-# SSH lands in Windows cmd. Ship the bash script as base64 (only [A-Za-z0-9+/=],
-# so neither cmd nor wsl.exe's argv parsing can mangle it) and run it via
-# process substitution — that keeps stdin free for `cat f | claude-remote sub2 -p …`.
+# SSH lands in Windows cmd. The bash script travels as ONE base64 argument to
+# bin/b64run in WSL: the hop is only [A-Za-z0-9+/=] — nothing cmd, PowerShell (herdr
+# panes) or wsl.exe can mangle — and stdin stays free for `cat f | claude-remote sub2 -p …`.
 script="cd $cwd && exec $target$launcher $args"
-b64="$(printf '%s\n' "$script" | base64 | tr -d '\n')"
-wsl="wsl.exe -d Ubuntu -e bash -c \"bash -l <(echo $b64 | base64 -d)\""
+b64="$(printf '%s' "$script" | base64 | tr -d '\n')"
+wsl="wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $b64"
 
 if [[ -n "$session" ]]; then
   [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "--session NAME: letters, digits, - and _ only" >&2; exit 2; }
-  exec ssh "$host" "herdr agent start $session --no-focus -- $wsl"
+  # herdr 0.9.5: tab in workspace "agents", then `pane run` types the hop + Enter into its shell.
+  # (Its JSON leaves Windows backslashes unescaped, so ids are grepped, not jq'd.)
+  herdr='%USERPROFILE%\agent-box\herdr.cmd'
+  field() { grep -o "\"$1\":\"[^\"]*\"" | head -1 | cut -d'"' -f4; }
+  ws="$(ssh "$host" "$herdr workspace list" | tr -d '\r' | grep -o '{[^{}]*"label":"agents"[^{}]*}' | field workspace_id || true)"
+  [[ -n "$ws" ]] || ws="$(ssh "$host" "$herdr workspace create --label agents --no-focus" | tr -d '\r' | field workspace_id)"
+  pane="$(ssh "$host" "$herdr tab create --workspace $ws --label $session --no-focus" | tr -d '\r' | field pane_id)"
+  [[ -n "$pane" ]] || { echo "herdr: could not create tab $session" >&2; exit 1; }
+  ssh "$host" "$herdr pane run $pane \"$wsl\"" >/dev/null
+  echo "started $session in herdr pane $pane — attach: ssh -t $host agent-box\\herdr.cmd"
+  exit 0
 fi
 tty=()
 [[ -t 0 && " $* " != *" -p "* && " $* " != *" --print "* ]] && tty=(-t)

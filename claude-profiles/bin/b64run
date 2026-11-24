@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# WSL-side half of claude-remote: run the base64-encoded bash script in $1 in a
+# login shell. The Windows hop then carries only [A-Za-z0-9+/=] — nothing cmd,
+# PowerShell (herdr panes) or wsl.exe's argv parsing can mangle — and stdin stays free.
+set -euo pipefail
+script="$(printf '%s' "$1" | base64 -d)"
+exec bash -lc "$script"
