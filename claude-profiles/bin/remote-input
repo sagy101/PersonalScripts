@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Mouse/keyboard on the remote Windows box's screen — only with the user's approval.
+#
+#   remote-input --goal "what this session is trying to achieve" \
+#                --why-not-cli "why the command line / headless browser can't do it" ACTION
+#   ACTION: click X Y | rightclick X Y | doubleclick X Y | move X Y | scroll N (+up / -down)
+#           type TEXT | key KEYS   (SendKeys syntax: {ENTER} {TAB} ^l %{F4} …)
+#
+# Coordinates are in the space remote-screen reports. Refuses (exit 3) while the laptop is
+# locked: input can't reach its apps then.
+# Each call shows the user a Mac dialog led by the goal and the reason (the action is only a
+# detail line): Deny (default) / Allow once / Allow for… 10, 30, 60, 120, 240 or 480 min —
+# a time window covers this same goal only. No answer in 2 min = Deny (exit 4).
+# Audit log: ~/.cache/remote-input/log.   Host: $CLAUDE_REMOTE_HOST (default "win").
+set -euo pipefail
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+goal="" why=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --goal) goal="${2:-}"; shift 2 ;;
+    --why-not-cli) why="${2:-}"; shift 2 ;;
+    *) break ;;
+  esac
+done
+[[ -n "$goal" && -n "$why" ]] || { echo "remote-input: --goal and --why-not-cli are required (the user decides on them)" >&2; usage; }
+[[ $# -ge 1 ]] || usage
+verb="$1"; shift
+int='^-?[0-9]+$'
+case "$verb" in
+  click | rightclick | doubleclick | move) [[ $# -eq 2 && "$1" =~ $int && "$2" =~ $int ]] || usage ;;
+  scroll) [[ $# -eq 1 && "$1" =~ $int ]] || usage ;;
+  type | key) [[ $# -ge 1 ]] || usage; set -- "$*" ;;
+  *) usage ;;
+esac
+action="$verb $*"
+bin="$(dirname "$(readlink -f "$0")")"
+
+# 1. Locked → nothing to approve.
+if [[ "$("$bin/remote-ps" '[bool](Get-Process LogonUI -ErrorAction SilentlyContinue)' | tr -d '\r')" == True ]]; then
+  echo "remote-input: the laptop is locked — input can't reach its apps. Ask the user to unlock it or connect via Remote Desktop." >&2
+  exit 3
+fi
+
+# 2. The user's approval: an open window for this goal, or the dialog.
+dir="$HOME/.cache/remote-input"; mkdir -p "$dir"
+key="$(printf '%s' "$goal" | shasum -a 256 | cut -c1-16)"
+now="$(date +%s)"
+if awk -v k="$key" -v n="$now" '$2 == k && $1 > n { f = 1 } END { exit !f }' "$dir/approvals" 2>/dev/null; then
+  verdict=window
+else
+  # Text goes in as argv (not spliced into AppleScript) so quotes/unicode can't break the dialog.
+  answer="$(osascript - "$goal" "$why" "$action" <<'OSA'
+on run argv
+  set msg to "An agent wants to use the mouse and keyboard on your Windows laptop." & return & return & ¬
+    "GOAL OF THE SESSION" & return & item 1 of argv & return & return & ¬
+    "WHY NOT THE COMMAND LINE / HEADLESS BROWSER" & return & item 2 of argv & return & return & ¬
+    "(this step: " & item 3 of argv & ")"
+  try
+    set r to display dialog msg with title "remote-input" buttons {"Deny", "Allow once", "Allow for…"} ¬
+      default button "Deny" cancel button "Deny" with icon caution giving up after 120
+  on error
+    return "deny"
+  end try
+  if gave up of r then return "deny"
+  if button returned of r is "Allow once" then return "once"
+  set c to choose from list {"10 min", "30 min", "60 min", "120 min", "240 min", "480 min"} ¬
+    default items {"10 min"} with title "remote-input" with prompt "Allow this goal for:"
+  if c is false then return "deny"
+  return item 1 of c
+end run
+OSA
+)" || answer=deny
+  case "$answer" in
+    once) verdict=once ;;
+    *" min") verdict="window-${answer% min}min"; echo "$((now + ${answer% min} * 60)) $key" >> "$dir/approvals" ;;
+    *) verdict=denied ;;
+  esac
+fi
+printf '%s %s key=%s action=%q goal=%q\n' "$(date -u +%FT%TZ)" "$verdict" "$key" "$action" "$goal" >> "$dir/log"
+[[ "$verdict" != denied ]] || { echo "remote-input: the user denied (or didn't answer within 2 min)" >&2; exit 4; }
+
+# 3. Do it. Text travels base64 so nothing in it can break the PowerShell.
+arg64="$(printf '%s' "$*" | base64 | tr -d '\n')"
+"$bin/remote-ps" <<PS
+\$verb = '$verb'; \$a = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$arg64'))
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -Namespace RI -Name U -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int d, UIntPtr e);
+'@
+function At(\$xy) { \$p = \$xy -split ' '; [RI.U]::SetCursorPos([int]\$p[0], [int]\$p[1]) | Out-Null; Start-Sleep -Milliseconds 50 }
+function Btn(\$down, \$up) { [RI.U]::mouse_event(\$down, 0, 0, 0, [UIntPtr]::Zero); [RI.U]::mouse_event(\$up, 0, 0, 0, [UIntPtr]::Zero) }
+switch (\$verb) {
+  'move'        { At \$a }
+  'click'       { At \$a; Btn 0x02 0x04 }
+  'doubleclick' { At \$a; Btn 0x02 0x04; Start-Sleep -Milliseconds 80; Btn 0x02 0x04 }
+  'rightclick'  { At \$a; Btn 0x08 0x10 }
+  'scroll'      { [RI.U]::mouse_event(0x0800, 0, 0, 120 * [int]\$a, [UIntPtr]::Zero) }
+  'type'        { [System.Windows.Forms.SendKeys]::SendWait((\$a -replace '([+^%~(){}\[\]])', '{\$1}')) }
+  'key'         { [System.Windows.Forms.SendKeys]::SendWait(\$a) }
+}
+"done: \$verb"
+PS

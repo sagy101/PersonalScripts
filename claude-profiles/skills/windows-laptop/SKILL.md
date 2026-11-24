@@ -18,6 +18,9 @@ agents for you. All tools below are on PATH; each opens the shared SSH connectio
 | Bash in WSL Ubuntu | `remote-wsl 'script'` (stdin passes through: `cat f \| remote-wsl 'wc -l'`) |
 | Should I offload? | `remote-load` — CPU, RAM, disk, agents for Mac and laptop |
 | This repo's current state over there | `remote-sync [--win] [NAME]` → prints the path for `--cwd` |
+| Browser test (headless Edge, works while locked) | `remote-py < test.py` |
+| See the laptop's screen | `remote-screen` → PNG path on this Mac (Read it) |
+| Click / type on its screen — **user approves each time** | `remote-input --goal "…" --why-not-cli "…" ACTION` |
 
 - **WSL vs `--win`:** WSL = Linux (`~/CascadeProjects/AM-PM`). `--win` = native Windows
   `claude.exe` working in `C:\Users\sashlag\CascadeProjects\AM-PM` (WSL path `~/winhome/…`).
@@ -54,6 +57,33 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
 4. Clean up when done:
    - WSL: `remote-wsl "git -C ~/CascadeProjects/AM-PM worktree remove --force $path"`
    - `--win`: `remote-ps 'git -C "$env:USERPROFILE\CascadeProjects\AM-PM" worktree remove --force "$env:USERPROFILE\wt\NAME"'`
+
+## Browser, screen and input — in this order of preference
+
+1. **Command line** (`remote-ps`, `remote-wsl`) whenever the job can be done without a screen.
+2. **Headless browser** for web UIs: `remote-py < test.py` runs Windows Python with Playwright
+   1.49 against the installed Edge; works while the laptop is locked.
+   ```python
+   from playwright.sync_api import sync_playwright
+   with sync_playwright() as p:
+       b = p.chromium.launch(channel="msedge", headless=True)
+       pg = b.new_page(); pg.goto("https://example.com"); print(pg.title())
+       pg.screenshot(path=r"C:\Users\sashlag\agent-box\shot.png"); b.close()
+   ```
+3. **The real desktop**, only when 1 and 2 truly can't do it (a native app, a UAC/installer
+   dialog, something only visible on screen):
+   - `remote-screen` — free to use; prints the coordinate space on stderr. While the laptop is
+     **locked** the image is black and says `LOCKED`.
+   - `remote-input` — **needs the user's approval for every goal.** It pops a dialog on the
+     user's Mac showing your `--goal` (what the session is trying to achieve) and
+     `--why-not-cli` (why 1 and 2 can't do it). Write both honestly and specifically; the user
+     decides on them. Deny = exit 4 (also after 2 min unanswered) — stop and tell the user;
+     don't retry in a loop. Locked = exit 3 — ask the user to unlock or connect via Remote Desktop.
+   - Actions: `click X Y`, `doubleclick X Y`, `rightclick X Y`, `move X Y`, `scroll N`,
+     `type TEXT`, `key KEYS` (SendKeys: `{ENTER}`, `{TAB}`, `^l`, `%{F4}`). Take a
+     `remote-screen` before and after; click into a field before typing.
+   - **Never** send mouse/keyboard input any other way (SendKeys or user32 via `remote-ps`,
+     AutoHotkey, …): that would bypass the user's approval.
 
 ## Talk to a remote agent
 

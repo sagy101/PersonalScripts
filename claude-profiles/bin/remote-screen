@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Screenshot of the remote Windows box's screen, saved as a PNG on this Mac.
+#   remote-screen [OUT.png]      → prints the PNG path (default: $TMPDIR/remote-screen-HHMMSS.png)
+# On stderr: the screen size (= the coordinate space remote-input uses), and a warning when
+# the laptop is locked — then you only see the lock screen, not its windows.
+# Host: $CLAUDE_REMOTE_HOST (default "win").
+set -euo pipefail
+out="${1:-${TMPDIR:-/tmp}/remote-screen-$(date +%H%M%S).png}"
+bin="$(dirname "$(readlink -f "$0")")"
+# [Console]::Out, not Write-Output: the base64 line must not be reflowed by PowerShell formatting.
+"$bin/remote-ps" <<'PS' | { read -r size state; base64 -d > "$out"; echo "remote-screen: $size $state" >&2; }
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+$locked = [bool](Get-Process LogonUI -ErrorAction SilentlyContinue)
+$b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+[System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+$ms = New-Object System.IO.MemoryStream
+$bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+[Console]::Out.WriteLine("$($b.Width)x$($b.Height) " + $(if ($locked) { 'LOCKED (lock screen only; unlock or use Remote Desktop to see windows)' } else { 'unlocked' }))
+[Console]::Out.Write([Convert]::ToBase64String($ms.ToArray()))
+PS
+[[ -s "$out" ]] || { echo "remote-screen: no image received" >&2; exit 1; }
+echo "$out"

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Run a Python script (on stdin) on the remote Windows box, in a venv with Playwright —
+# headless browser testing with the Edge already installed there; works while it is locked:
+#   remote-py < test.py
+#   in the script:  p.chromium.launch(channel="msedge", headless=True)
+# Host: $CLAUDE_REMOTE_HOST (default "win"). Exit code = the script's.
+set -euo pipefail
+# shellcheck source=remote-lib.sh
+source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
+remote_warm
+exec ssh "$REMOTE_HOST" '%USERPROFILE%\agent-box\pw\Scripts\python.exe -'

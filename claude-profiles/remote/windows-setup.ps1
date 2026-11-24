@@ -151,6 +151,21 @@ foreach ($id in 'Git.Git', 'GitHub.cli') {
   if ($LASTEXITCODE -ne 0) { winget install --id $id -e --silent --accept-package-agreements --accept-source-agreements }
 }
 if (-not (Test-Path "$env:USERPROFILE\.local\bin\claude.exe")) { Invoke-RestMethod https://claude.ai/install.ps1 | Invoke-Expression }
+# 6b. Headless browser testing (Mac: remote-py): per-user Python + a venv with pinned Playwright
+#     driving the installed Edge (channel="msedge": no browser download). python.org installer,
+#     not winget — winget is a Store alias that doesn't resolve in SSH sessions.
+$py = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+if (-not (Test-Path $py)) {
+  $inst = "$env:TEMP\python-3.12.8-amd64.exe"
+  Invoke-WebRequest https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe -OutFile $inst -UseBasicParsing
+  $p = Start-Process $inst -ArgumentList '/quiet', 'InstallAllUsers=0', 'PrependPath=0', 'Include_launcher=0', 'Include_test=0' -Wait -PassThru
+  if ($p.ExitCode -ne 0) { throw "Python installer failed (exit $($p.ExitCode))" }
+  Remove-Item $inst
+}
+$venv = "$env:USERPROFILE\agent-box\pw"
+if (-not (Test-Path "$venv\Scripts\python.exe")) { & $py -m venv $venv }
+& "$venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check playwright==1.49.1
+if ($LASTEXITCODE -ne 0) { throw 'pip install playwright failed' }
 Update-Path
 
 # 7. GitHub: one browser login here; WSL borrows this token (wsl-setup.sh).
