@@ -13,4 +13,7 @@ $script
 } } catch { [Console]::Error.WriteLine((\$_ | Out-String).TrimEnd()); exit 1 }
 if (\$LASTEXITCODE) { exit \$LASTEXITCODE }"
 b64="$(printf '%s' "$wrapped" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
-exec ssh "${CLAUDE_REMOTE_HOST:-win}" "powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $b64"
+# shellcheck source=remote-lib.sh
+source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
+remote_warm
+exec ssh "$REMOTE_HOST" "powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $b64"

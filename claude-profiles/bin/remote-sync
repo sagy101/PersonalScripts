@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Copy this repo's working state — commits AND uncommitted/untracked edits — into a fresh
+# git worktree on the remote box, without pushing anything. Run inside the repo on the Mac.
+#
+#   remote-sync [--win] [NAME]
+#     prints the box path to hand to `claude-remote … --cwd <path>` / `remote-wsl 'cd <path> && …'`
+#     --win  → worktree on the Windows side (C:\Users\<you>\wt\NAME, via Git for Windows)
+#
+# How: base = merge-base(HEAD, origin/main) — a commit GitHub has. The box fetches origin,
+# checks out base in a new worktree, then gets only the files that differ (tar over stdin)
+# and deletes the ones deleted here. `git diff` in the worktree then shows exactly your change.
+# Host: $CLAUDE_REMOTE_HOST (default "win").
+set -euo pipefail
+win=""
+[[ "${1:-}" == --win ]] && { win=1; shift; }
+cd "$(git rev-parse --show-toplevel)"
+base="$(git merge-base HEAD origin/main)"
+url="$(git remote get-url origin)"
+branch="$(git rev-parse --abbrev-ref HEAD)"
+name="${1:-$(basename "$(pwd)")-${branch//\//-}-$(date +%m%d-%H%M%S)}"
+[[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "remote-sync: NAME may only use letters, digits, . _ -" >&2; exit 2; }
+deleted="$(git diff --name-only -z --diff-filter=D "$base" | base64 | tr -d '\n')"
+
+# Box side (WSL bash). For --win, git is Git for Windows on the Windows clone + worktree.
+box=$(cat <<EOF
+set -euo pipefail
+reponame="\$(basename "$url" .git)"
+# root resolved: wslpath -w doesn't follow the ~/winhome symlink (it gives \\\\wsl.localhost\\…)
+if [ -n "$win" ]; then root="\$(readlink -f ~/winhome)"; show=~/winhome; git() { "/mnt/c/Program Files/Git/cmd/git.exe" "\$@" </dev/null; }; p() { wslpath -w "\$1"; }
+else root=~; show=~; p() { echo "\$1"; }; fi
+repo="\$(find "\$root/CascadeProjects" -maxdepth 1 -iname "\$reponame" -print -quit 2>/dev/null)"
+if [ -z "\$repo" ]; then repo="\$root/CascadeProjects/\$reponame"; git clone -q "$url" "\$(p "\$repo")"; fi
+git -C "\$(p "\$repo")" fetch -q origin
+wt="\$root/wt/$name"
+[ ! -e "\$wt" ] || { echo "remote-sync: \$wt already exists" >&2; exit 2; }
+mkdir -p "\$root/wt"
+git -C "\$(p "\$repo")" worktree add -q --detach "\$(p "\$wt")" $base
+cd "\$wt"
+tar -xzf -
+printf '%s' "$deleted" | base64 -d | xargs -0 -r rm -f --
+echo "\$show/wt/$name" | sed "s|^\$HOME|~|"
+EOF
+)
+
+# Never ship secrets: untracked-but-not-ignored files that look like credentials stay here
+# (tracked files are already on GitHub). A first test copied a repo's untracked .env.
+secret='(^|/)(\.env(\..*)?|\.netrc|\.npmrc|\.pypirc|id_(rsa|ed25519|ecdsa)[^/]*|[^/]*credentials[^/]*\.json|[^/]*\.(pem|key|p12|pfx))$'
+skipped="$(git ls-files -z -o --exclude-standard | grep -zE "$secret" | tr '\0' '\n' || true)"
+[[ -z "$skipped" ]] || printf 'remote-sync: NOT copied (look like secrets):\n%s\n' "$skipped" >&2
+
+# shellcheck source=remote-lib.sh
+source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
+remote_warm
+{ git diff --name-only -z --diff-filter=d "$base"; git ls-files -z -o --exclude-standard | { grep -zvE "$secret" || true; }; } |
+  COPYFILE_DISABLE=1 tar -czf - --no-xattrs --no-mac-metadata --null -T - |  # no Apple metadata (GNU tar warns per file)
+  ssh "$REMOTE_HOST" "wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $(printf '%s' "$box" | base64 | tr -d '\n')"

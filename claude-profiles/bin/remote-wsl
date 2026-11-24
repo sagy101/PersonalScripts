@@ -6,4 +6,7 @@
 set -euo pipefail
 [[ $# -ge 1 ]] || { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 b64="$(printf '%s' "$1" | base64 | tr -d '\n')"
-exec ssh "${CLAUDE_REMOTE_HOST:-win}" "wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $b64"
+# shellcheck source=remote-lib.sh
+source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
+remote_warm
+exec ssh "$REMOTE_HOST" "wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $b64"

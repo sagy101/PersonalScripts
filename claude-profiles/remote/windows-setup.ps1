@@ -54,6 +54,11 @@ icacls.exe "$env:USERPROFILE\.ssh\authorized_keys" /inheritance:r /grant "${me}:
 if (-not (Select-String -Path $cfg -Pattern '^PasswordAuthentication no' -Quiet)) {
   Set-Content -Path $cfg -Value (@('PasswordAuthentication no') + (Get-Content $cfg)) -Encoding ascii
 }
+# The Mac multiplexes every claude-remote / remote-* call over ONE connection; the default
+# of 10 sessions per connection would fail the 11th parallel call.
+if (-not (Select-String -Path $cfg -Pattern '^MaxSessions ' -Quiet)) {
+  Set-Content -Path $cfg -Value (@('MaxSessions 64') + (Get-Content $cfg)) -Encoding ascii
+}
 & $sshdExe -t
 if ($LASTEXITCODE -ne 0) { throw "sshd_config is invalid: $cfg" }
 # Run sshd as YOU (logon task), not as the SYSTEM service. The service must log
@@ -155,6 +160,9 @@ if ($LASTEXITCODE -ne 0) { gh auth login --hostname github.com --git-protocol ht
 gh auth setup-git
 $amPm = "$env:USERPROFILE\CascadeProjects\AM-PM"
 if (-not (Test-Path $amPm)) { gh repo clone PFPT-Internal/am-pm $amPm }
+# Cloned elevated → owned by Administrators; SSH sessions run unelevated as you and git.exe
+# then refuses the repo ("dubious ownership"). Own it, rather than relaxing safe.directory.
+icacls.exe $amPm /setowner $me /T /C /Q | Out-Null
 
 # 7b. WSL networking: the default NAT mode cannot get out over GlobalProtect (curl timed out);
 #     mirrored mode shares Windows' interfaces (VPN included) and DNS.

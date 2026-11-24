@@ -9,22 +9,27 @@
 #   claude-remote <litellm|sub1|sub2> --session NAME [--cwd DIR] [claude args...]
 #       → persistent agent in the box's (Windows) herdr; returns immediately.
 #         NAME: letters, digits, - and _ only.
-#         Opens a tab NAME in the box's herdr workspace "agents".
+#         Opens a tab NAME in the box's herdr workspace "agents"; refuses a NAME already there.
 #         Watch/attach:  ssh -t "$CLAUDE_REMOTE_HOST" 'agent-box\herdr.cmd'
 #   --win       → run the native Windows claude.exe instead of the WSL one
 #                 (default cwd: the C: clone, ~/winhome/CascadeProjects/AM-PM)
 #
+# Cap: refuses (exit 75) when the laptop already runs $CLAUDE_REMOTE_MAX agents (default 6).
 # Host: $CLAUDE_REMOTE_HOST (default "win", an ~/.ssh/config alias).
 # SSH forwards no env vars, so this session's ANTHROPIC_* / CLAUDE_* never leak
 # into the remote run (the local `env -u` dance is not needed).
 set -euo pipefail
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 [[ $# -ge 1 ]] || usage
 profile="$1"; shift
 case "$profile" in litellm | sub1 | sub2) ;; *) usage ;; esac
 
-host="${CLAUDE_REMOTE_HOST:-win}"
+# shellcheck source=remote-lib.sh
+source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
+host="$REMOTE_HOST"
+max="${CLAUDE_REMOTE_MAX:-6}"
+[[ "$max" =~ ^[0-9]+$ ]] || { echo "CLAUDE_REMOTE_MAX must be a number" >&2; exit 2; }
 cwd=""
 session=""
 target=""
@@ -46,9 +51,13 @@ args=""
 # SSH lands in Windows cmd. The bash script travels as ONE base64 argument to
 # bin/b64run in WSL: the hop is only [A-Za-z0-9+/=] — nothing cmd, PowerShell (herdr
 # panes) or wsl.exe can mangle — and stdin stays free for `cat f | claude-remote sub2 -p …`.
-script="cd $cwd && exec $target$launcher $args"
-b64="$(printf '%s' "$script" | base64 | tr -d '\n')"
-wsl="wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $b64"
+# The cap is checked ON the box right before exec — not here — so parallel launches
+# race only for milliseconds. Inside WSL, WSL agents show as `claude`, --win ones as `claude.exe`.
+cap='n=$(ps -eo comm= | grep -Ec "^claude(\.exe)?$" || true); if [ "$n" -ge @CAP@ ]; then echo "claude-remote: the laptop already runs $n agents (cap @CAP@, CLAUDE_REMOTE_MAX); wait for one to finish, or see remote-load" >&2; exit 75; fi'
+cap="${cap//@CAP@/$max}"
+hop() { echo "wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $(printf '%s' "$1" | base64 | tr -d '\n')"; }
+wsl="$(hop "$cap; cd $cwd && exec $target$launcher $args")"
+remote_warm
 
 if [[ -n "$session" ]]; then
   [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "--session NAME: letters, digits, - and _ only" >&2; exit 2; }
@@ -58,6 +67,10 @@ if [[ -n "$session" ]]; then
   field() { grep -o "\"$1\":\"[^\"]*\"" | head -1 | cut -d'"' -f4; }
   ws="$(ssh "$host" "$herdr workspace list" | tr -d '\r' | grep -o '{[^{}]*"label":"agents"[^{}]*}' | field workspace_id || true)"
   [[ -n "$ws" ]] || ws="$(ssh "$host" "$herdr workspace create --label agents --no-focus" | tr -d '\r' | field workspace_id)"
+  if ssh "$host" "$herdr tab list --workspace $ws" | grep -q "\"label\":\"$session\""; then
+    echo "herdr: a session named $session already exists — pick another name" >&2; exit 2
+  fi
+  ssh "$host" "$(hop "$cap")"  # refuse now, not silently inside a pane, when the laptop is full
   pane="$(ssh "$host" "$herdr tab create --workspace $ws --label $session --no-focus" | tr -d '\r' | field pane_id)"
   [[ -n "$pane" ]] || { echo "herdr: could not create tab $session" >&2; exit 1; }
   ssh "$host" "$herdr pane run $pane \"$wsl\"" >/dev/null

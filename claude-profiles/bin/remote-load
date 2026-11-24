@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Where should heavy work run? Prints CPU, RAM, disk and running agents for this Mac and
+# the remote Windows box side by side.   Usage: remote-load
+# Host: $CLAUDE_REMOTE_HOST (default "win").
+set -euo pipefail
+# shellcheck source=remote-lib.sh
+source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
+
+cores="$(sysctl -n hw.ncpu)"
+load1="$(sysctl -n vm.loadavg | awk '{print $2}')"
+ramfree="$(memory_pressure | awk -F': ' '/free percentage/{print $2}')"
+ramtotal="$(( $(sysctl -n hw.memsize) / 1073741824 ))"
+disk="$(df -g /System/Volumes/Data | awk 'NR==2{print $4" GB free of "$2}')"
+agents="$(pgrep -x claude | wc -l | tr -d ' ')"
+mac="$(printf '%-7s cpu %5.0f%% (load %s / %s cores) | ram %s free of %s GB | disk %s | claude procs %s' \
+  mac "$(echo "$load1 * 100 / $cores" | bc -l)" "$load1" "$cores" "$ramfree" "$ramtotal" "$disk" "$agents")"
+
+remote_warm
+laptop="$(ssh "$REMOTE_HOST" "powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $(iconv -f UTF-8 -t UTF-16LE <<'PS' | base64 | tr -d '\n'
+$ProgressPreference = 'SilentlyContinue'
+$cpu   = (Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average
+$cores = (Get-CimInstance Win32_Processor | Measure-Object NumberOfLogicalProcessors -Sum).Sum
+$os    = Get-CimInstance Win32_OperatingSystem
+$c     = Get-PSDrive C
+# agents = claude-remote runs: WSL ones show as `claude`, --win ones as `claude.exe` (no inner quotes: PS 5.1 mangles them)
+$agents = wsl.exe -d Ubuntu -e sh -c 'ps -eo comm= | grep -cx -e claude -e claude.exe'
+'{0,-7} cpu {1,5:N0}% ({2} cores)          | ram {3:N0}% free of {4:N0} GB | disk {5:N0} GB free of {6:N0} | agents {7}' -f 'laptop', $cpu, $cores, (100 * $os.FreePhysicalMemory / $os.TotalVisibleMemorySize), ($os.TotalVisibleMemorySize / 1MB), ($c.Free / 1GB), (($c.Free + $c.Used) / 1GB), "$agents".Trim()
+PS
+)" | tr -d '\r')"
+
+echo "$mac"
+echo "$laptop"
