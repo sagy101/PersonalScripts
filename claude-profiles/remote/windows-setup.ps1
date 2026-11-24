@@ -63,7 +63,7 @@ Stop-Service sshd -ErrorAction SilentlyContinue
 Set-Service sshd -StartupType Disabled
 Get-Process sshd -ErrorAction SilentlyContinue | Stop-Process -Force  # a previous run's listener holds :22
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-  -Argument "-NoProfile -WindowStyle Hidden -Command & '$sshdExe'"
+  -Argument "-NoProfile -WindowStyle Hidden -Command & '$sshdExe' -D"  # -D: outside the service sshd otherwise "daemonizes" = exits
 $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $me
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
