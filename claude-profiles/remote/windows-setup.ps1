@@ -22,7 +22,10 @@ if (-not ($distros -match '^Ubuntu')) {
 }
 
 # 2. OpenSSH server (default cmd shell): key-only logins, exactly the Mac key.
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+# Slow (Windows Update / corporate WSUS, can take 10-30 min), so only when missing.
+if ((Get-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0).State -ne 'Installed') {
+  Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+}
 Set-Service sshd -StartupType Automatic
 Start-Service sshd  # first start also writes the default sshd_config
 $macKey = (Invoke-RestMethod "$raw/mac.pub").Trim()
