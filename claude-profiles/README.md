@@ -35,8 +35,18 @@ Agents run on a Windows box — in WSL Ubuntu, or as native Windows `claude.exe`
    screen off after 1 min, an "Agent mode" shortcut (Ctrl+Alt+K: lock + screen off), a herdr server at logon, Remote Desktop, Git + gh + Claude Code, clones AM-PM to `C:`, then runs `remote/wsl-setup.sh`.
    You only: create the Ubuntu user, one `gh` browser login, paste the LiteLLM URL/key, and run `claude setup-token`
    for sub1 and sub2 (long-lived, ~1 year; shared by the WSL and Windows runs). It ends by probing all 6 combinations.
-2. On the Mac, `~/.ssh/config`: `Host win` / `HostName <windows-name>` / `User <windows-user>` /
-   `IdentityFile ~/.ssh/id_ed25519` / `IdentitiesOnly yes`.
+2. On the Mac, `~/.ssh/config` (the key lives in 1Password, item "win-agent-box"; `remote/mac.pub` is its public half,
+   and the box's sshd is key-only):
+   ```
+   Host win
+     HostName <windows-name>
+     User <windows-user>
+     IdentityFile ~/.ssh/win_agent_box.pub   # selects the 1Password key
+     IdentitiesOnly yes
+     ControlMaster auto                      # one Touch ID approval…
+     ControlPath ~/.ssh/cm-%r@%h-%p
+     ControlPersist 8h                       # …then sub-agents reuse the connection for 8h
+   ```
 
 ```bash
 claude-remote sub2 -p "review the diff"               # headless sub-agent in WSL, output here
