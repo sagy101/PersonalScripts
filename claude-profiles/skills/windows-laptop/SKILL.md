@@ -20,7 +20,7 @@ agents for you. All tools below are on PATH; each opens the shared SSH connectio
 | This repo's current state over there | `remote-sync [--win] [NAME]` → prints the path for `--cwd` |
 | Browser test (headless Edge, works while locked) | `remote-py < test.py` |
 | See the laptop's screen | `remote-screen` → PNG path on this Mac (Read it) |
-| Click / type on its screen — **user approves each time** | `remote-input --goal "…" --why-not-cli "…" ACTION` |
+| Click / type on its screen — **user approves each time** | `remote-input --goal "…" --why-not-cli "…" --window "Title" ACTION` |
 
 - **WSL vs `--win`:** WSL = Linux (`~/CascadeProjects/AM-PM`). `--win` = native Windows
   `claude.exe` working in `C:\Users\sashlag\CascadeProjects\AM-PM` (WSL path `~/winhome/…`).
@@ -71,14 +71,19 @@ costs a few seconds per call, and the laptop's files are separate from the Mac's
        pg.screenshot(path=r"C:\Users\sashlag\agent-box\shot.png"); b.close()
    ```
    Fetch files back byte-for-byte: `remote-wsl 'cat ~/winhome/agent-box/shot.png' > shot.png`.
-3. **The real desktop**, only when 1 and 2 truly can't do it (a native app, a UAC/installer
+3. **The real desktop**, only when the user is present — the laptop auto-locks after 15 min idle
+   (company policy; never try to change that) — and only when 1 and 2 truly can't do it (a native app, a UAC/installer
    dialog, something only visible on screen):
    - `remote-screen` — free to use; prints the coordinate space on stderr. While the laptop is
      **locked** the image is black and says `LOCKED`.
    - `remote-input` — **needs the user's approval for every goal.** It pops a dialog on the
      user's Mac showing your `--goal` (what the session is trying to achieve) and
      `--why-not-cli` (why 1 and 2 can't do it). Write both honestly and specifically; the user
-     decides on them. Deny = exit 4 (also after 2 min unanswered) — stop and tell the user;
+     decides on them. A time-window approval covers only your session and that exact goal.
+   - `--window "Title"` is required: the window under the point (clicks) or the focused
+     window (typing/keys) must have that text in its title, checked before the dialog and
+     again right before acting; otherwise exit 5 and nothing is sent. Windows move — take a
+     fresh `remote-screen` and pass the real title. Deny = exit 4 (also after 2 min unanswered) — stop and tell the user;
      don't retry in a loop. Locked = exit 3 — ask the user to unlock or connect via Remote Desktop.
    - Actions: `click X Y`, `doubleclick X Y`, `rightclick X Y`, `move X Y`, `scroll N`,
      `type TEXT`, `key KEYS` (SendKeys: `{ENTER}`, `{TAB}`, `^l`, `%{F4}`). Take a

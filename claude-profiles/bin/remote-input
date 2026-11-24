@@ -2,27 +2,32 @@
 # Mouse/keyboard on the remote Windows box's screen — only with the user's approval.
 #
 #   remote-input --goal "what this session is trying to achieve" \
-#                --why-not-cli "why the command line / headless browser can't do it" ACTION
+#                --why-not-cli "why the command line / headless browser can't do it" \
+#                --window "title of the window this must land in" ACTION
 #   ACTION: click X Y | rightclick X Y | doubleclick X Y | move X Y | scroll N (+up / -down)
 #           type TEXT | key KEYS   (SendKeys syntax: {ENTER} {TAB} ^l %{F4} …)
 #
 # Coordinates are in the space remote-screen reports. Refuses (exit 3) while the laptop is
-# locked: input can't reach its apps then.
+# locked: input can't reach its apps then. Refuses (exit 5) unless the window under the point
+# (click/move/scroll) or the focused window (type/key) has --window in its title — windows
+# move, and a stray click must never land in another agent's console.
 # Each call shows the user a Mac dialog led by the goal and the reason (the action is only a
 # detail line): Deny (default) / Allow once / Allow for… 10, 30, 60, 120, 240 or 480 min —
-# a time window covers this same goal only. No answer in 2 min = Deny (exit 4).
+# a time window covers this same goal from this same Claude session only (subagents share
+# their parent's session). No answer in 2 min = Deny (exit 4).
 # Audit log: ~/.cache/remote-input/log.   Host: $CLAUDE_REMOTE_HOST (default "win").
 set -euo pipefail
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
-goal="" why=""
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+goal="" why="" win=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --goal) goal="${2:-}"; shift 2 ;;
     --why-not-cli) why="${2:-}"; shift 2 ;;
+    --window) win="${2:-}"; shift 2 ;;
     *) break ;;
   esac
 done
-[[ -n "$goal" && -n "$why" ]] || { echo "remote-input: --goal and --why-not-cli are required (the user decides on them)" >&2; usage; }
+[[ -n "$goal" && -n "$why" && -n "$win" ]] || { echo "remote-input: --goal, --why-not-cli and --window are required" >&2; usage; }
 [[ $# -ge 1 ]] || usage
 verb="$1"; shift
 int='^-?[0-9]+$'
@@ -35,59 +40,31 @@ esac
 action="$verb $*"
 bin="$(dirname "$(readlink -f "$0")")"
 
-# 1. Locked → nothing to approve.
-if [[ "$("$bin/remote-ps" '[bool](Get-Process LogonUI -ErrorAction SilentlyContinue)' | tr -d '\r')" == True ]]; then
-  echo "remote-input: the laptop is locked — input can't reach its apps. Ask the user to unlock it or connect via Remote Desktop." >&2
-  exit 3
-fi
-
-# 2. The user's approval: an open window for this goal, or the dialog.
-dir="$HOME/.cache/remote-input"; mkdir -p "$dir"
-key="$(printf '%s' "$goal" | shasum -a 256 | cut -c1-16)"
-now="$(date +%s)"
-if awk -v k="$key" -v n="$now" '$2 == k && $1 > n { f = 1 } END { exit !f }' "$dir/approvals" 2>/dev/null; then
-  verdict=window
-else
-  # Text goes in as argv (not spliced into AppleScript) so quotes/unicode can't break the dialog.
-  answer="$(osascript - "$goal" "$why" "$action" <<'OSA'
-on run argv
-  set msg to "An agent wants to use the mouse and keyboard on your Windows laptop." & return & return & ¬
-    "GOAL OF THE SESSION" & return & item 1 of argv & return & return & ¬
-    "WHY NOT THE COMMAND LINE / HEADLESS BROWSER" & return & item 2 of argv & return & return & ¬
-    "(this step: " & item 3 of argv & ")"
-  try
-    set r to display dialog msg with title "remote-input" buttons {"Deny", "Allow once", "Allow for…"} ¬
-      default button "Deny" cancel button "Deny" with icon caution giving up after 120
-  on error
-    return "deny"
-  end try
-  if gave up of r then return "deny"
-  if button returned of r is "Allow once" then return "once"
-  set c to choose from list {"10 min", "30 min", "60 min", "120 min", "240 min", "480 min"} ¬
-    default items {"10 min"} with title "remote-input" with prompt "Allow this goal for:"
-  if c is false then return "deny"
-  return item 1 of c
-end run
-OSA
-)" || answer=deny
-  case "$answer" in
-    once) verdict=once ;;
-    *" min") verdict="window-${answer% min}min"; echo "$((now + ${answer% min} * 60)) $key" >> "$dir/approvals" ;;
-    *) verdict=denied ;;
-  esac
-fi
-printf '%s %s key=%s action=%q goal=%q\n' "$(date -u +%FT%TZ)" "$verdict" "$key" "$action" "$goal" >> "$dir/log"
-[[ "$verdict" != denied ]] || { echo "remote-input: the user denied (or didn't answer within 2 min)" >&2; exit 4; }
-
-# 3. Do it. Text travels base64 so nothing in it can break the PowerShell.
+# The laptop side, used twice: send 1 = only check the target window (before the dialog),
+# send 0 = check again and act. Exit 5 = wrong window.
 arg64="$(printf '%s' "$*" | base64 | tr -d '\n')"
-"$bin/remote-ps" <<PS
+win64="$(printf '%s' "$win" | base64 | tr -d '\n')"
+send() {
+  "$bin/remote-ps" <<PS
+\$dry = $1
 \$verb = '$verb'; \$a = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$arg64'))
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -Namespace RI -Name U -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int d, UIntPtr e);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+[DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+public struct POINT { public int X; public int Y; }
 '@
+\$want = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$win64'))
+function Title(\$h) { \$sb = New-Object System.Text.StringBuilder 512; [void][RI.U]::GetWindowText(\$h, \$sb, 512); \$sb.ToString() }
+if (\$verb -in 'type', 'key') { \$h = [RI.U]::GetForegroundWindow(); \$where = 'the focused window' }
+else { \$xy = \$a -split ' '; \$pt = New-Object RI.U+POINT; \$pt.X = [int]\$xy[0]; \$pt.Y = [int]\$xy[1]; \$h = [RI.U]::GetAncestor([RI.U]::WindowFromPoint(\$pt), 2); \$where = "the window at \$(\$xy[0]),\$(\$xy[1])" }
+\$got = Title \$h
+if (\$got -notlike "*\$want*") { [Console]::Error.WriteLine("remote-input: \$where is '\$got', not '\$want' — nothing sent. Take a fresh remote-screen."); exit 5 }
+if (\$dry) { exit 0 }
 function At(\$xy) { \$p = \$xy -split ' '; [RI.U]::SetCursorPos([int]\$p[0], [int]\$p[1]) | Out-Null; Start-Sleep -Milliseconds 50 }
 function Btn(\$down, \$up) { [RI.U]::mouse_event(\$down, 0, 0, 0, [UIntPtr]::Zero); [RI.U]::mouse_event(\$up, 0, 0, 0, [UIntPtr]::Zero) }
 switch (\$verb) {
@@ -101,3 +78,56 @@ switch (\$verb) {
 }
 "done: \$verb"
 PS
+}
+
+# 1. Locked → nothing to approve.
+if [[ "$("$bin/remote-ps" '[bool](Get-Process LogonUI -ErrorAction SilentlyContinue)' | tr -d '\r')" == True ]]; then
+  echo "remote-input: the laptop is locked — input can't reach its apps. Ask the user to unlock it or connect via Remote Desktop." >&2
+  exit 3
+fi
+send 1 >/dev/null  # wrong window → exit 5 here, before the user is asked anything
+
+# 2. The user's approval: an open window for this goal, or the dialog.
+dir="$HOME/.cache/remote-input"; mkdir -p "$dir"
+# Who asks: the Claude session (shared with its subagents); outside Claude, the parent process.
+session="${CLAUDE_CODE_SESSION_ID:-pid-$PPID}"
+asker="Claude session ${session:0:8} in ${PWD/#$HOME/~}"
+key="$(printf '%s\n%s' "$session" "$goal" | shasum -a 256 | cut -c1-16)"
+now="$(date +%s)"
+if awk -v k="$key" -v n="$now" '$2 == k && $1 > n { f = 1 } END { exit !f }' "$dir/approvals" 2>/dev/null; then
+  verdict=window
+else
+  # Text goes in as argv (not spliced into AppleScript) so quotes/unicode can't break the dialog.
+  answer="$(osascript - "$goal" "$why" "$action" "$asker" <<'OSA'
+on run argv
+  set msg to "An agent wants to use the mouse and keyboard on your Windows laptop." & return & return & ¬
+    "GOAL OF THE SESSION" & return & item 1 of argv & return & return & ¬
+    "WHY NOT THE COMMAND LINE / HEADLESS BROWSER" & return & item 2 of argv & return & return & ¬
+    "(this step: " & item 3 of argv & " — asked by " & item 4 of argv & ")"
+  try
+    set r to display dialog msg with title "remote-input" buttons {"Deny", "Allow once", "Allow for…"} ¬
+      default button "Deny" cancel button "Deny" with icon caution giving up after 120
+  on error
+    return "deny"
+  end try
+  if gave up of r then return "deny"
+  if button returned of r is "Allow once" then return "once"
+  set c to choose from list {"10 min", "30 min", "60 min", "120 min", "240 min", "480 min"} ¬
+    default items {"10 min"} with title "remote-input" with prompt "Allow this goal, for this session only, for:"
+  if c is false then return "deny"
+  return item 1 of c
+end run
+OSA
+)" || answer=deny
+  case "$answer" in
+    once) verdict=once ;;
+    *" min") verdict="window-${answer% min}min"; echo "$((now + ${answer% min} * 60)) $key" >> "$dir/approvals" ;;
+    *) verdict=denied ;;
+  esac
+fi
+printf '%s %s key=%s session=%s window=%q action=%q goal=%q\n' "$(date -u +%FT%TZ)" "$verdict" "$key" "${session:0:8}" "$win" "$action" "$goal" >> "$dir/log"
+[[ "$verdict" != denied ]] || { echo "remote-input: the user denied (or didn't answer within 2 min)" >&2; exit 4; }
+
+# 3. Do it (send 0) — re-checking the window right before acting. Text travels base64 so
+#    nothing in it can break the PowerShell.
+send 0
