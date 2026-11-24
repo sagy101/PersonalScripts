@@ -10,7 +10,7 @@
 #       → persistent agent in the box's (Windows) herdr; returns immediately.
 #         NAME: letters, digits, - and _ only.
 #         Opens a tab NAME in the box's herdr workspace "agents".
-#         Watch/attach:  ssh -t "$CLAUDE_REMOTE_HOST" 'agent-box\\herdr.cmd'
+#         Watch/attach:  ssh -t "$CLAUDE_REMOTE_HOST" 'agent-box\herdr.cmd'
 #   --win       → run the native Windows claude.exe instead of the WSL one
 #                 (default cwd: the C: clone, ~/winhome/CascadeProjects/AM-PM)
 #
