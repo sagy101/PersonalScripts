@@ -53,6 +53,6 @@ claude-remote sub2 -p "review the diff"               # headless sub-agent in WS
 claude-remote sub2 --win -p "review the diff"         # same, native Windows claude.exe (C: clone)
 claude-remote litellm                                 # interactive, in this terminal
 claude-remote sub1 --session rev1 --cwd '~/x'         # persistent herdr session there (quote the ~)
-ssh -t win agent-box\\herdr.cmd                       # watch / attach to those (the box's Windows herdr, workspace "agents")
+ssh -t win 'agent-box\herdr.cmd'                      # watch / attach to those (the box's Windows herdr, workspace "agents")
 ```
 Lock the box with Win+L; never sign out (that stops the herdr server). Desktop fallback: Remote Desktop.
