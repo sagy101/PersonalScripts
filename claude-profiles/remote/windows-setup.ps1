@@ -3,7 +3,8 @@
 # First run installs WSL and asks for a reboot; run the same line again after it.
 #
 # Result: sshd on :22 whose shell is WSL bash (Mac key from remote/mac.pub),
-# never sleeps on AC, screen off after 1 min, lid does nothing, WSL kept alive
+# never sleeps on AC, screen off after 1 min, lid does nothing, an "Agent mode"
+# desktop shortcut (Ctrl+Alt+K) that locks + blanks the screen, WSL kept alive
 # at logon, Remote Desktop on, Git + gh + native Claude Code, AM-PM cloned to
 # %USERPROFILE%\CascadeProjects\AM-PM — then it runs wsl-setup.sh inside Ubuntu.
 # Re-runnable: every step skips what is already done.
@@ -38,6 +39,25 @@ powercfg /change monitor-timeout-ac 1
 powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0
 powercfg /setactive SCHEME_CURRENT
 
+# 3b. "Agent mode" = lock + screen off NOW: desktop shortcut, hotkey Ctrl+Alt+K.
+#     The box keeps running (step 3); Win+L alone also works, the screen then goes off after 1 min.
+$box = "$env:USERPROFILE\agent-box"
+New-Item -ItemType Directory -Force $box | Out-Null
+Set-Content -Path "$box\lock-screen-off.ps1" -Value @'
+Add-Type -Namespace AgentBox -Name User32 -MemberDefinition @"
+[DllImport("user32.dll")] public static extern bool LockWorkStation();
+[DllImport("user32.dll")] public static extern int SendMessage(int hWnd, int msg, int wParam, int lParam);
+"@
+[AgentBox.User32]::LockWorkStation() | Out-Null
+Start-Sleep -Seconds 1  # let the lock screen draw, or it wakes the display again
+[AgentBox.User32]::SendMessage(0xFFFF, 0x0112, 0xF170, 2) | Out-Null  # broadcast SC_MONITORPOWER = off
+'@
+$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Agent mode (lock + screen off).lnk")
+$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$lnk.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$box\lock-screen-off.ps1`""
+$lnk.Hotkey = 'CTRL+ALT+K'
+$lnk.Save()
+
 # 4. Keep the WSL VM up at logon (it otherwise stops when the last SSH session ends).
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wsl.exe" -Argument '-d Ubuntu -e sleep infinity'
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
@@ -51,6 +71,7 @@ Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' 
 Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'
 
 # 6. Windows tools for `claude-remote --win`: Git (Claude Code needs Git Bash), gh, Claude Code.
+if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw 'winget missing: install "App Installer" from the Microsoft Store, then re-run.' }
 foreach ($id in 'Git.Git', 'GitHub.cli') {
   winget list --id $id -e | Out-Null
   if ($LASTEXITCODE -ne 0) { winget install --id $id -e --silent --accept-package-agreements --accept-source-agreements }
