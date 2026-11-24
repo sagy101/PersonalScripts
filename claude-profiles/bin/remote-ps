@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 # Run a PowerShell script on the remote Windows box:  remote-ps '<script>'  (or the script on stdin)
 # Sent as -EncodedCommand (UTF-16LE base64), so cmd's quoting never touches it.
-# Stops at the first error (ErrorActionPreference=Stop): message on stderr as text, exit 1.
+# Stops at the first PowerShell error (text on stderr, exit 1); native programs' stderr passes through.
 # Host: $CLAUDE_REMOTE_HOST (default "win"). Otherwise exit code = the script's (exit N, native exit codes).
 set -euo pipefail
 script="${1:-$(cat)}"
-# Fail loudly, readably: stop at the first error, print it as TEXT on stderr (PowerShell's own
-# stderr over a pipe is CLIXML), exit 1. Native exit codes pass through. No progress bars (more CLIXML).
-wrapped="\$ProgressPreference='SilentlyContinue'; \$ErrorActionPreference='Stop'
+# Fail loudly, readably: a PowerShell error (cmdlet, .NET exception) stops the script and is
+# printed as TEXT on stderr, exit 1 — PowerShell's own stderr over a pipe is CLIXML. A native
+# program's stderr (progress lines: uv, git, pip) is passed through as text and does NOT stop it
+# (in PowerShell 5.1 it would otherwise become a terminating NativeCommandError). Exit codes pass.
+wrapped="\$ProgressPreference='SilentlyContinue'
+\$PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
 try { & {
 $script
-} } catch { [Console]::Error.WriteLine((\$_ | Out-String).TrimEnd()); exit 1 }
+} 2>&1 | ForEach-Object { if (\$_ -is [System.Management.Automation.ErrorRecord]) { [Console]::Error.WriteLine(\$_.Exception.Message) } else { \$_ } } }
+catch { [Console]::Error.WriteLine((\$_ | Out-String).TrimEnd()); exit 1 }
 if (\$LASTEXITCODE) { exit \$LASTEXITCODE }"
 b64="$(printf '%s' "$wrapped" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
+# The hop runs through cmd.exe: 8191 characters max, and UTF-16 base64 is ~2.7x the script.
+(( ${#b64} < 8000 )) || { echo "remote-ps: script too long for the Windows command line (~3 KB max). Copy it over and run it: remote-wsl 'cat > ~/winhome/agent-box/x.ps1' < x.ps1; remote-ps '& \"\$env:USERPROFILE\\agent-box\\x.ps1\"'" >&2; exit 2; }
 # shellcheck source=remote-lib.sh
 source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
 remote_warm

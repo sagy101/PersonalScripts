@@ -25,8 +25,17 @@ agents for you. All tools below are on PATH; each opens the shared SSH connectio
 - **WSL vs `--win`:** WSL = Linux (`~/CascadeProjects/AM-PM`). `--win` = native Windows
   `claude.exe` working in `C:\Users\sashlag\CascadeProjects\AM-PM` (WSL path `~/winhome/…`).
 - **Profiles:** same accounts and quotas as on this Mac. If sub1/sub2 say "hit your limit", use litellm.
-- `remote-ps` stops at the first error and exits 1 with readable text; add `-ErrorAction
-  SilentlyContinue` only where an error is expected.
+- `remote-ps` stops at the first PowerShell error (readable text, exit 1); add
+  `-ErrorAction SilentlyContinue` only where one is expected. Native programs' stderr (uv, git,
+  pip progress) passes through as text and does not stop it.
+- **Long input goes on stdin.** Every call crosses cmd.exe (8191 characters): about 5 KB of
+  prompt for `claude-remote`, 6 KB of bash, 3 KB of PowerShell — over that the tools refuse
+  with a hint. Use `claude-remote … -p < prompt.txt`, `remote-wsl 'bash -s' < script.sh`, or
+  copy a `.ps1` over and run it.
+- **Junctions don't work on native Windows** (error 448, "untrusted mount point"): SSH-launched
+  processes enforce Windows' redirection trust, so junctions a non-admin created can't be
+  followed. Tools that link (e.g. `uv` managed Python) fail; point them at a real path instead,
+  e.g. `uv venv --python <path\to\python.exe> --no-python-downloads`. WSL is unaffected.
 
 ## Should I offload?
 
@@ -110,8 +119,9 @@ A laptop agent cannot call back to this Mac; it only answers on its output. Keep
 
 ## Limits
 
-- **Max 6 agents at once** on the laptop: `claude-remote` exits 75 past that. Wait for one to
-  finish, or ask the user before raising `CLAUDE_REMOTE_MAX`.
+- **Capacity:** `claude-remote` exits 75 (with the reason) when the laptop has < 4 GB RAM free,
+  CPU > 85%, or 16 agents running. Wait and retry later; ask the user before raising the
+  backstop with `CLAUDE_REMOTE_MAX`.
 - **Touch ID:** the first connection after ~24 h idle (or after the Mac slept / changed network)
   waits for the user's 1Password approval. If a call hangs at the start, tell the user.
 - **Script size:** about 10 KB of PowerShell or 24 KB of bash per call; send bigger data on stdin.
@@ -124,7 +134,7 @@ A laptop agent cannot call back to this Mac; it only answers on its output. Keep
 |---|---|---|
 | `cannot reach 'win'` / timeout | laptop asleep, off GlobalProtect, or its address moved | Tell the user; don't retry in a loop |
 | Hangs before any output | waiting for Touch ID | Tell the user to approve 1Password |
-| `exit 75` | agent cap reached | Wait, check `remote-load` |
+| `exit 75` | laptop busy (RAM / CPU / agent backstop — the reason is printed) | Wait, check `remote-load` |
 | `remote-input` exit 3 / 4 / 5 / 6 | locked / user denied / wrong window / another agent has the desktop | Ask user to unlock / stop / fresh `remote-screen` / wait |
 | `Permission denied (publickey)` | key/user config broke | Tell the user — don't edit SSH config |
 | `hit your weekly limit` | that subscription is exhausted | Use another profile |

@@ -6,6 +6,7 @@
 set -euo pipefail
 [[ $# -ge 1 ]] || { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 b64="$(printf '%s' "$1" | base64 | tr -d '\n')"
+(( ${#b64} < 8000 )) || { echo "remote-wsl: script too long for the Windows command line (~6 KB max). Pipe it instead: remote-wsl 'bash -s' < script.sh" >&2; exit 2; }
 # shellcheck source=remote-lib.sh
 source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
 remote_warm

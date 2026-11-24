@@ -57,6 +57,8 @@ args=""
 cap="PersonalScripts/claude-profiles/bin/remote-capacity $max"
 hop() { echo "wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $(printf '%s' "$1" | base64 | tr -d '\n')"; }
 wsl="$(hop "$cap; cd $cwd && exec $target$launcher $args")"
+# The hop runs through cmd.exe (8191 characters max); a long prompt must come on stdin instead.
+(( ${#wsl} < 8000 )) || { echo "claude-remote: prompt/arguments too long for the Windows command line (~5 KB max). Pipe the prompt instead: claude-remote $profile … -p < prompt.txt" >&2; exit 2; }
 remote_warm
 
 if [[ -n "$session" ]]; then
