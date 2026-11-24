@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Box side (runs in WSL on the laptop) of claude-remote's admission check: may one more agent
+# start now? Exit 75 with the reason on stderr when it may not.
+#   remote-capacity [MAX_AGENTS=16] [MIN_FREE_MB=4096] [MAX_CPU_PCT=85]
+# RAM and CPU are Windows' own numbers (the agents' builds/tests are what load the laptop;
+# a claude process itself is ~220 MB). Agents are counted from WSL: `claude` = WSL agent,
+# `claude.exe` = a --win agent's interop process.
+set -euo pipefail
+max_agents="${1:-16}" min_free="${2:-4096}" max_cpu="${3:-85}"
+n="$(ps -eo comm= | grep -cx -e claude -e claude.exe || true)"
+read -r free cpu < <(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -NonInteractive -Command \
+  '$o = Get-CimInstance Win32_OperatingSystem; $c = (Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average; "{0} {1}" -f [int]($o.FreePhysicalMemory / 1024), [int]$c' | tr -d '\r')
+why=""
+if [ "$n" -ge "$max_agents" ]; then why="$n agents already run (backstop $max_agents)"; fi
+if [ "$free" -lt "$min_free" ]; then why="only $free MB RAM free (needs $min_free)"; fi
+if [ "$cpu" -gt "$max_cpu" ]; then why="CPU at $cpu% (limit $max_cpu%)"; fi
+if [ -n "$why" ]; then
+  echo "claude-remote: the laptop is busy — $why. Wait for agents to finish, or see remote-load." >&2
+  exit 75
+fi

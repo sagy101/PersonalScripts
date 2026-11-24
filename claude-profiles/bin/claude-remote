@@ -14,7 +14,8 @@
 #   --win       → run the native Windows claude.exe instead of the WSL one
 #                 (default cwd: the C: clone, ~/winhome/CascadeProjects/AM-PM)
 #
-# Cap: refuses (exit 75) when the laptop already runs $CLAUDE_REMOTE_MAX agents (default 6).
+# Capacity: refuses (exit 75, reason given) when the laptop has < 4 GB RAM free, CPU > 85%, or
+# already runs $CLAUDE_REMOTE_MAX agents (backstop, default 16) — checked there by bin/remote-capacity.
 # Host: $CLAUDE_REMOTE_HOST (default "win", an ~/.ssh/config alias).
 # SSH forwards no env vars, so this session's ANTHROPIC_* / CLAUDE_* never leak
 # into the remote run (the local `env -u` dance is not needed).
@@ -28,7 +29,7 @@ case "$profile" in litellm | sub1 | sub2) ;; *) usage ;; esac
 # shellcheck source=remote-lib.sh
 source "$(dirname "$(readlink -f "$0")")/remote-lib.sh"
 host="$REMOTE_HOST"
-max="${CLAUDE_REMOTE_MAX:-6}"
+max="${CLAUDE_REMOTE_MAX:-16}"
 [[ "$max" =~ ^[0-9]+$ ]] || { echo "CLAUDE_REMOTE_MAX must be a number" >&2; exit 2; }
 cwd=""
 session=""
@@ -51,10 +52,9 @@ args=""
 # SSH lands in Windows cmd. The bash script travels as ONE base64 argument to
 # bin/b64run in WSL: the hop is only [A-Za-z0-9+/=] — nothing cmd, PowerShell (herdr
 # panes) or wsl.exe can mangle — and stdin stays free for `cat f | claude-remote sub2 -p …`.
-# The cap is checked ON the box right before exec — not here — so parallel launches
-# race only for milliseconds. Inside WSL, WSL agents show as `claude`, --win ones as `claude.exe`.
-cap='n=$(ps -eo comm= | grep -Ec "^claude(\.exe)?$" || true); if [ "$n" -ge @CAP@ ]; then echo "claude-remote: the laptop already runs $n agents (cap @CAP@, CLAUDE_REMOTE_MAX); wait for one to finish, or see remote-load" >&2; exit 75; fi'
-cap="${cap//@CAP@/$max}"
+# Capacity is checked ON the box right before exec — not here — so parallel launches race only
+# for the ~2 s the check takes.
+cap="PersonalScripts/claude-profiles/bin/remote-capacity $max"
 hop() { echo "wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $(printf '%s' "$1" | base64 | tr -d '\n')"; }
 wsl="$(hop "$cap; cd $cwd && exec $target$launcher $args")"
 remote_warm
