@@ -88,7 +88,9 @@ fi
 # Its config lives in the Windows home (~/winhome, linked by wsl-setup.sh);
 # WSLENV carries the env across; Linux-path MCP args don't apply there.
 if [[ "${CLAUDE_PROFILE_TARGET:-}" == windows ]]; then
-  winhome="$HOME/winhome"
+  # Resolved: WSLENV's /p translation doesn't follow the ~/winhome symlink — it would hand
+  # claude.exe \\wsl.localhost\…\winhome\… and nothing (transcripts, --resume) would persist.
+  winhome="$(readlink -f "$HOME/winhome")"
   [[ -x "$winhome/.local/bin/claude.exe" ]] || { echo "No Windows claude.exe at $winhome/.local/bin — run wsl-setup.sh" >&2; exit 1; }
   case "$profile" in claude-sub1) cfg=.claude ;; *) cfg=".claude-${profile#claude-}" ;; esac
   export CLAUDE_CONFIG_DIR="$winhome/$cfg"
