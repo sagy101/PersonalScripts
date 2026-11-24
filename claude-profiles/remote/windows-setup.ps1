@@ -61,6 +61,17 @@ if (-not (Select-String -Path $cfg -Pattern '^MaxSessions ' -Quiet)) {
 }
 & $sshdExe -t
 if ($LASTEXITCODE -ne 0) { throw "sshd_config is invalid: $cfg" }
+# Shell = nowin-shell.exe: sshd runs in the desktop session (below), where every command's
+# cmd.exe would get a VISIBLE console window that steals focus. This tiny GUI stub starts
+# cmd.exe with CREATE_NO_WINDOW and passes stdin/stdout/exit code through. Built here with
+# the .NET Framework compiler that ships with Windows. Read per new SSH connection.
+Invoke-RestMethod "$raw/nowin-shell.cs" -OutFile "$env:USERPROFILE\agent-box\nowin-shell.cs"
+& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize `
+  /out:"$env:USERPROFILE\agent-box\nowin-shell.exe" "$env:USERPROFILE\agent-box\nowin-shell.cs"
+if ($LASTEXITCODE -ne 0) { throw 'compiling nowin-shell.exe failed' }
+if (-not (Test-Path HKLM:\SOFTWARE\OpenSSH)) { New-Item -Path HKLM:\SOFTWARE\OpenSSH | Out-Null }
+New-ItemProperty -Path HKLM:\SOFTWARE\OpenSSH -Name DefaultShell -Value "$env:USERPROFILE\agent-box\nowin-shell.exe" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path HKLM:\SOFTWARE\OpenSSH -Name DefaultShellCommandOption -Value '/c' -PropertyType String -Force | Out-Null
 # Run sshd as YOU (logon task), not as the SYSTEM service. The service must log
 # a domain account on without a password (S4U), which this corp domain refuses (Security
 # 4625, 0xC0000064 → every session reset right after auth); an S4U session also could not
