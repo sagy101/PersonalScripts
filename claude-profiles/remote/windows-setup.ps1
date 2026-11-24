@@ -21,15 +21,25 @@ if (-not ($distros -match '^Ubuntu')) {
   exit 0
 }
 
-# 2. OpenSSH server (default cmd shell), Mac key authorized.
+# 2. OpenSSH server (default cmd shell): key-only logins, exactly the Mac key.
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
 Set-Service sshd -StartupType Automatic
-Start-Service sshd
+Start-Service sshd  # first start also writes the default sshd_config
 $macKey = (Invoke-RestMethod "$raw/mac.pub").Trim()
 # Admin accounts read administrators_authorized_keys (ACL'd to Administrators+SYSTEM), not ~/.ssh.
+# Overwritten, not appended: a rotated mac.pub must also revoke the old key.
 $keys = "$env:ProgramData\ssh\administrators_authorized_keys"
-if (-not (Test-Path $keys) -or -not (Select-String -Path $keys -SimpleMatch $macKey -Quiet)) { Add-Content -Path $keys -Value $macKey }
+Set-Content -Path $keys -Value $macKey -Encoding ascii
 icacls.exe $keys /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
+# No passwords: nobody on the network can guess their way into this admin account.
+# First line, because sshd keeps the first value of a keyword (the default file ends in a Match block).
+$cfg = "$env:ProgramData\ssh\sshd_config"
+if (-not (Select-String -Path $cfg -Pattern '^PasswordAuthentication no' -Quiet)) {
+  Set-Content -Path $cfg -Value (@('PasswordAuthentication no') + (Get-Content $cfg)) -Encoding ascii
+}
+& "$env:SystemRoot\System32\OpenSSH\sshd.exe" -t
+if ($LASTEXITCODE -ne 0) { throw "sshd_config is invalid: $cfg" }
+Restart-Service sshd
 
 # 3. Power: awake forever on AC, screen off after 1 min, lid = do nothing.
 powercfg /change standby-timeout-ac 0
