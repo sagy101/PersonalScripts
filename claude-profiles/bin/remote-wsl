@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Run a bash script in the remote box's WSL Ubuntu (login shell, from ~):  remote-wsl '<script>'
+# Same base64 hop as claude-remote (bin/b64run), so quoting survives and stdin stays free:
+#   cat data.txt | remote-wsl 'wc -l'
+# Host: $CLAUDE_REMOTE_HOST (default "win"). Exit code = the script's.
+set -euo pipefail
+[[ $# -ge 1 ]] || { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+b64="$(printf '%s' "$1" | base64 | tr -d '\n')"
+exec ssh "${CLAUDE_REMOTE_HOST:-win}" "wsl.exe -d Ubuntu --cd ~ -e PersonalScripts/claude-profiles/bin/b64run $b64"

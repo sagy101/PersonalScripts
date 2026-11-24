@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Run a PowerShell script on the remote Windows box:  remote-ps '<script>'  (or the script on stdin)
+# Sent as -EncodedCommand (UTF-16LE base64), so cmd's quoting never touches it.
+# Stops at the first error (ErrorActionPreference=Stop): message on stderr as text, exit 1.
+# Host: $CLAUDE_REMOTE_HOST (default "win"). Otherwise exit code = the script's (exit N, native exit codes).
+set -euo pipefail
+script="${1:-$(cat)}"
+# Fail loudly, readably: stop at the first error, print it as TEXT on stderr (PowerShell's own
+# stderr over a pipe is CLIXML), exit 1. Native exit codes pass through. No progress bars (more CLIXML).
+wrapped="\$ProgressPreference='SilentlyContinue'; \$ErrorActionPreference='Stop'
+try { & {
+$script
+} } catch { [Console]::Error.WriteLine((\$_ | Out-String).TrimEnd()); exit 1 }
+if (\$LASTEXITCODE) { exit \$LASTEXITCODE }"
+b64="$(printf '%s' "$wrapped" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
+exec ssh "${CLAUDE_REMOTE_HOST:-win}" "powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $b64"

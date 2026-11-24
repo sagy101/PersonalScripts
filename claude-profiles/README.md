@@ -54,5 +54,8 @@ claude-remote sub2 --win -p "review the diff"         # same, native Windows cla
 claude-remote litellm                                 # interactive, in this terminal
 claude-remote sub1 --session rev1 --cwd '~/x'         # persistent herdr session there (quote the ~)
 ssh -t win 'agent-box\herdr.cmd'                      # watch / attach to those (the box's Windows herdr, workspace "agents")
+remote-ps 'Get-Service | ? Status -eq Running'       # any PowerShell on the box (stops at first error, exit 1)
+remote-wsl 'cd ~/CascadeProjects/AM-PM && git status' # any bash in the box's WSL; stdin passes through
 ```
+Scripts travel base64-encoded in one command line (~10 KB PowerShell / ~24 KB bash max); pipe bigger payloads via stdin.
 Lock the box with Win+L; never sign out (that stops the herdr server). Desktop fallback: Remote Desktop.
